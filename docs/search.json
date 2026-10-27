@@ -1,0 +1,114 @@
+[
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html",
+    "href": "BSTA374_Lecture_BayesINLA.html",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "",
+    "text": "Some numbers rest on a lot of data, some on very little. Today we learn the Bayesian way of taking that into account, first with restaurants and a well, then with lung cancer in Pennsylvania. Reading: Moraga Ch. 3, 4 and §5.1–5.3.\n\n\n\n\n\n\nNoteBy the end of today you can\n\n\n\n\nexplain prior, data and posterior with an everyday example;\nexplain why the SIR of a small county is unreliable;\nsay what shrinkage does, and to which counties;\nread a smoothed map and an exceedance map made with R-INLA.\n\n\n\n\nlibrary(sf)\nlibrary(dplyr)\nlibrary(tidyr)\nlibrary(ggplot2)\nlibrary(spdep)\nlibrary(SpatialEpi)   # pennLC\nlibrary(INLA)\n\n\n\n\n\n\n\nWarning\n\n\n\nInstall INLA before class. It is not on CRAN:\ninstall.packages(\"INLA\",\n  repos = c(getOption(\"repos\"), INLA = \"https://inla.r-inla-download.org/R/stable\"))"
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#today",
+    "href": "BSTA374_Lecture_BayesINLA.html#today",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "",
+    "text": "Some numbers rest on a lot of data, some on very little. Today we learn the Bayesian way of taking that into account, first with restaurants and a well, then with lung cancer in Pennsylvania. Reading: Moraga Ch. 3, 4 and §5.1–5.3.\n\n\n\n\n\n\nNoteBy the end of today you can\n\n\n\n\nexplain prior, data and posterior with an everyday example;\nexplain why the SIR of a small county is unreliable;\nsay what shrinkage does, and to which counties;\nread a smoothed map and an exceedance map made with R-INLA.\n\n\n\n\nlibrary(sf)\nlibrary(dplyr)\nlibrary(tidyr)\nlibrary(ggplot2)\nlibrary(spdep)\nlibrary(SpatialEpi)   # pennLC\nlibrary(INLA)\n\n\n\n\n\n\n\nWarning\n\n\n\nInstall INLA before class. It is not on CRAN:\ninstall.packages(\"INLA\",\n  repos = c(getOption(\"repos\"), INLA = \"https://inla.r-inla-download.org/R/stable\"))"
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#two-restaurants",
+    "href": "BSTA374_Lecture_BayesINLA.html#two-restaurants",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "Two restaurants",
+    "text": "Two restaurants\n\n\n\n\nNumber of reviews\nAverage rating\n\n\n\n\nRestaurant A\n2\n5.0 ★\n\n\nRestaurant B\n800\n4.7 ★\n\n\n\nWhich one would you pick? Most people pick B, even though A has the higher average: two five-star reviews could come from the owner’s friends. Without noticing, you did three things.\n\nYou started from what you know about restaurants in general: a typical one gets about 4.0 stars. That is the prior.\nYou looked at each restaurant’s own reviews. That is the data.\nYou combined the two, trusting the reviews more when there are many. That is the posterior, your best guess."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#the-best-guess-is-a-weighted-average",
+    "href": "BSTA374_Lecture_BayesINLA.html#the-best-guess-is-a-weighted-average",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "The best guess is a weighted average",
+    "text": "The best guess is a weighted average\nSay our prior is worth 10 reviews of 4.0 stars. The best guess for a restaurant is\n\\[\n\\text{best guess} \\;=\\; w \\times \\text{its average} \\;+\\; (1 - w) \\times 4.0,\n\\qquad w = \\frac{\\text{its reviews}}{\\text{its reviews} + 10}.\n\\]\n\\(w\\) is how much we trust its own reviews, between 0 and 1. In R:\n\n\nCode\nbest_guess &lt;- function(reviews, average, prior_mean = 4.0, prior_worth = 10) {\n  w &lt;- reviews / (reviews + prior_worth)        # trust in its own reviews\n  w * average + (1 - w) * prior_mean            # weighted average\n}\n\nbest_guess(reviews = 2,   average = 5.0)        # Restaurant A\n\n\n[1] 4.166667\n\n\nCode\nbest_guess(reviews = 800, average = 4.7)        # Restaurant B\n\n\n[1] 4.691358\n\n\nRestaurant A’s 5.0 is pulled back to 4.17: two reviews are not enough to convince us. B barely moves, to 4.69. Pulling an estimate toward the average is called shrinkage."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#more-reviews-less-shrinkage",
+    "href": "BSTA374_Lecture_BayesINLA.html#more-reviews-less-shrinkage",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "More reviews, less shrinkage",
+    "text": "More reviews, less shrinkage\nWhat if A kept getting five-star reviews?\n\n\nCode\ntibble(reviews = c(1, 2, 5, 10, 50, 100, 800)) |&gt;\n  mutate(w          = round(reviews / (reviews + 10), 2),   # trust in its reviews\n         best_guess = round(best_guess(reviews, 5.0), 2))\n\n\n# A tibble: 7 × 3\n  reviews     w best_guess\n    &lt;dbl&gt; &lt;dbl&gt;      &lt;dbl&gt;\n1       1  0.09       4.09\n2       2  0.17       4.17\n3       5  0.33       4.33\n4      10  0.5        4.5 \n5      50  0.83       4.83\n6     100  0.91       4.91\n7     800  0.99       4.99\n\n\n\n\nCode\ntibble(reviews = 1:1000) |&gt;\n  mutate(guess = best_guess(reviews, 5.0)) |&gt;\n  ggplot(aes(reviews, guess)) +\n  geom_hline(yintercept = c(4, 5), linetype = 2, colour = \"grey50\") +\n  annotate(\"text\", x = 1, y = c(3.95, 5.05), hjust = 0, size = 3.5,\n           label = c(\"prior: a typical restaurant (4.0)\", \"its own reviews (5.0)\")) +\n  geom_line(linewidth = 1.2, colour = \"darkgreen\") +\n  geom_point(data = tibble(reviews = 2, guess = best_guess(2, 5.0)), size = 3) +\n  annotate(\"text\", x = 2.4, y = best_guess(2, 5.0), label = \"Restaurant A\",\n           hjust = 0, vjust = 1.6, size = 3.5) +\n  scale_x_log10() +\n  labs(x = \"Number of reviews (log scale)\", y = \"Best guess (stars)\") +\n  theme_classic(base_size = 12)\n\n\n\n\n\n\n\n\nFigure 1: Best guess for a restaurant whose reviews all give 5.0 stars, as reviews accumulate.\n\n\n\n\n\nWith 2 reviews, the guess stays close to the prior. With 10 reviews, as many as the prior is worth, it sits exactly halfway. With hundreds, the prior hardly matters.\n\n\n\n\n\n\nTipKey idea\n\n\n\nThe posterior is a compromise between the prior and the data. The more data, the more the data win."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#the-story",
+    "href": "BSTA374_Lecture_BayesINLA.html#the-story",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "The story",
+    "text": "The story\nA family tests its well for arsenic ten times. The EPA limit is 10 µg/L. Their question: how often is this water above the limit? Call that share \\(\\theta\\): \\(\\theta = 0.2\\) means unsafe one test in five.\n\n\nCode\nepa   &lt;- 10                                          # EPA limit, µg/L\nconc  &lt;- c(14, 7, 12, 18, 11, 15, 9, 13, 14, 14)     # 10 tests (illustrative)\nabove &lt;- as.integer(conc &gt; epa)                      # 1 = above, 0 = below\nabove\n\n\n [1] 1 0 1 1 1 1 0 1 1 1\n\n\nWe do not start from nothing. In nearby wells, about half of past tests were above the limit: 5 of 10. That is our prior, centred on \\(\\theta = 0.5\\). A Beta curve keeps the score: Beta(5, 5) means 5 tests above and 5 below, borrowed from the neighbours. Each new test above the limit adds 1 to the first number, each test below adds 1 to the second."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#watching-the-posterior-learn",
+    "href": "BSTA374_Lecture_BayesINLA.html#watching-the-posterior-learn",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "Watching the posterior learn",
+    "text": "Watching the posterior learn\nIn each panel, red dotted is what we believed before the test, green is what we believe after.\n\n\nCode\nplot_update &lt;- function(a, b, x, n, title = \"\") {\n  theta &lt;- seq(0, 1, 0.001)\n  plot(theta, dbeta(theta, a, b), type = \"l\", lty = 3, lwd = 3, col = \"red\",\n       ylim = c(0, 4), bty = \"l\", xlab = expression(theta), ylab = \"\",\n       main = title)                                            # before\n  if (n &gt; 0)                                                    # no test, no update\n    lines(theta, dbeta(theta, a + x, b + n - x), lwd = 3, col = \"darkgreen\")  # after\n}\n\n\n\n\nCode\npar(mfrow = c(3, 4), mar = c(4, 2, 2, 1))\n\na &lt;- 5; b &lt;- 5                                      # prior: 5 of 10 above in nearby wells\nplot_update(a, b, 0, 0, title = \"Before testing: nearby wells\")\n\nfor (i in 1:10) {\n  plot_update(a, b, above[i], 1,\n              title = paste0(\"#\", i, \": \", conc[i], \" ug/L\",\n                             ifelse(above[i] == 1, \" (above)\", \" (below)\")))\n  a &lt;- a + above[i]                                 # after ...\n  b &lt;- b + 1 - above[i]                             # ... becomes next before\n}\n\n\n\n\n\n\n\n\nFigure 2: Each panel starts from the previous panel’s green curve and adds one test.\n\n\n\n\n\nThree things to notice:\n\nA test above the limit pushes the curve right; a test below pushes it left (tests 2 and 7).\nThe curve gets taller and narrower: more tests, more certainty.\nEach panel’s green curve becomes the next panel’s red curve. That is Bayesian learning.\n\n\n\n\n\n\n\nNote\n\n\n\nWhy does the y-axis stop at 4? It shows a density, not a probability, so it can exceed 1; the area under each curve is 1. We fix it at 4 so the panels can be compared."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#what-do-we-know-after-ten-tests",
+    "href": "BSTA374_Lecture_BayesINLA.html#what-do-we-know-after-ten-tests",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "What do we know after ten tests?",
+    "text": "What do we know after ten tests?\n\n\nCode\na / (a + b)                                      # best guess for θ\n\n\n[1] 0.65\n\n\nCode\nqbeta(c(0.025, 0.975), a, b)                     # 95% credible interval\n\n\n[1] 0.4344984 0.8371141\n\n\nCode\n1 - pbeta(0.5, a, b)                             # P(unsafe more than half the time)\n\n\n[1] 0.9164658\n\n\nOur best guess is that the water is above the limit about 65% of the time, and with 95% probability between 43% and 84% (the credible interval). The probability that it is unsafe more than half the time is 0.92. Bayesian results answer the family’s question directly, as a probability.\nWhere does 65% come from? The well’s own tests say 8 of 10, 80%. The nearby wells say 50%. The prior is worth 10 tests and the well has 10 of its own, so the answer sits halfway. It is the restaurant formula again:\n\\[\n0.65 \\;=\\; w \\times 0.80\n\\;+\\; (1 - w) \\times 0.50,\n\\qquad w = \\frac{10}{10 + 10} = 0.5.\n\\]\n\n\n\n\n\n\nTipKey idea\n\n\n\nWe start from what we already know, here the nearby wells, and each new test updates it. More data, a narrower curve, more certainty."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#the-data",
+    "href": "BSTA374_Lecture_BayesINLA.html#the-data",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "The data",
+    "text": "The data\nWe rebuild the Pennsylvania lung cancer counts from the SIR lecture: \\(O\\) observed cases, \\(E\\) expected cases, and SIR \\(= O/E\\).\n\n\nCode\ndata(pennLC)\nd &lt;- pennLC$data\n\nref &lt;- d |&gt;\n  group_by(race, gender, age) |&gt;\n  summarise(r = sum(cases) / sum(population), .groups = \"drop\")   # reference rates\n\ncounty &lt;- d |&gt;\n  left_join(ref, by = c(\"race\", \"gender\", \"age\")) |&gt;\n  group_by(county) |&gt;\n  summarise(O = sum(cases), E = sum(population * r), .groups = \"drop\") |&gt;\n  mutate(county = as.character(county), SIR = O / E)\n\npa &lt;- st_as_sf(pennLC$spatial.polygon) |&gt;\n  st_set_crs(4326) |&gt;\n  mutate(county = names(pennLC$spatial.polygon)) |&gt;\n  st_transform(5070) |&gt;                                           # Albers\n  left_join(county, by = \"county\")\n\nsir_breaks &lt;- c(0, 0.67, 0.83, 0.95, 1.05, 1.2, 1.5, Inf)\nsir_fill   &lt;- scale_fill_brewer(palette = \"RdBu\", direction = -1, drop = FALSE, name = \"Risk\")"
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#the-sir-map",
+    "href": "BSTA374_Lecture_BayesINLA.html#the-sir-map",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "The SIR map",
+    "text": "The SIR map\n\n\nCode\nggplot(pa) +\n  geom_sf(aes(fill = cut(SIR, sir_breaks)), colour = \"white\", linewidth = 0.2) +\n  sir_fill +\n  theme_void(base_size = 12)\n\n\n\n\n\n\n\n\nFigure 3: Lung cancer SIRs, Pennsylvania counties.\n\n\n\n\n\nWhich counties have the most extreme SIRs?\n\n\nCode\nextremes &lt;- county |&gt;\n  arrange(SIR) |&gt;\n  slice(c(1:3, 65:67)) |&gt;                           # 3 lowest, 3 highest\n  mutate(E = round(E, 1), SIR = round(SIR, 2))\nextremes\n\n\n# A tibble: 6 × 4\n  county       O     E   SIR\n  &lt;chr&gt;    &lt;int&gt; &lt;dbl&gt; &lt;dbl&gt;\n1 juniata      6  18.7  0.32\n2 sullivan     3   7.4  0.4 \n3 montour      8  16.1  0.5 \n4 cameron      8   5.9  1.35\n5 venango     70  51.1  1.37\n6 potter      22  16    1.37\n\n\nOf these six counties, 5 expect fewer than 20 cases; the median county expects 75. A few cases more or less move their SIR a lot. Small counties are like restaurants with two reviews."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#the-funnel-plot",
+    "href": "BSTA374_Lecture_BayesINLA.html#the-funnel-plot",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "The funnel plot",
+    "text": "The funnel plot\nHow far can an SIR stray by chance alone? If a county’s true risk were exactly the state’s, its SIR would still fall, about 95% of the time, within \\(1 \\pm 1.96/\\sqrt{E}\\). Plotted against \\(E\\), that range is a funnel.\n\n\nCode\nfunnel &lt;- tibble(E = exp(seq(log(4), log(1500), length.out = 200))) |&gt;\n  mutate(lo = 1 - 1.96 / sqrt(E),                   # chance range of the SIR\n         hi = 1 + 1.96 / sqrt(E))\n\nlabelled &lt;- filter(county, county %in% c(\"sullivan\", \"potter\", \"juniata\", \"philadelphia\"))\n\nggplot() +\n  geom_ribbon(data = funnel, aes(E, ymin = lo, ymax = hi), fill = \"grey85\") +\n  geom_hline(yintercept = 1, colour = \"grey50\") +\n  geom_point(data = county, aes(E, SIR)) +\n  geom_text(data = labelled, aes(E, SIR, label = tools::toTitleCase(county)),\n            nudge_y = 0.07, size = 3.5) +\n  scale_x_log10() +\n  labs(x = \"Expected cases (log scale)\", y = \"SIR\") +\n  theme_classic(base_size = 12)\n\n\n\n\n\n\n\n\nFigure 4: SIRs against expected cases. Grey: where about 95% of SIRs fall by chance alone.\n\n\n\n\n\nThe funnel is wide on the left. Potter’s 1.37 and Sullivan’s 0.40 sit inside it: they could be chance. Philadelphia’s 1.16 is far outside: with more than 1,200 expected cases, a 16% excess is not chance.\n\n\n\n\n\n\nImportantThe problem in one sentence\n\n\n\nA raw SIR mixes real differences in risk with chance, and chance is largest in small counties."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#same-formula-new-names",
+    "href": "BSTA374_Lecture_BayesINLA.html#same-formula-new-names",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "Same formula, new names",
+    "text": "Same formula, new names\n\n\n\nRestaurants\nCounties\n\n\n\n\nnumber of reviews\nexpected cases \\(E\\)\n\n\nits average rating\nits SIR\n\n\na typical restaurant, 4.0\nthe state average, 1\n\n\nprior worth 10 reviews\nstate average worth \\(k\\) expected cases\n\n\ntrust in its own reviews, \\(w\\)\ntrust in its own SIR, \\(w\\)\n\n\n\nSo each county gets\n\\[\n\\text{estimate} \\;=\\; w \\times \\text{SIR} \\;+\\; (1 - w) \\times 1,\n\\qquad w = \\frac{E}{E + k}.\n\\]\nA big county (large \\(E\\)) keeps its SIR. A small county borrows from the state."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#who-decides-k-the-data",
+    "href": "BSTA374_Lecture_BayesINLA.html#who-decides-k-the-data",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "Who decides \\(k\\)? The data",
+    "text": "Who decides \\(k\\)? The data\nFor the restaurants we picked 10 ourselves. For counties, R estimates \\(k\\) from the 67 SIRs:\n\nif counties differ much more than chance alone would produce, real differences are large, the state average is worth little, and \\(k\\) is small;\nif counties differ about as much as chance would produce, the state average is worth a lot, and \\(k\\) is large.\n\nLetting the data choose the prior this way is called empirical Bayes (Clayton and Kaldor 1987; Marshall 1991). EBest() in spdep does it in one line.\n\n\nCode\neb &lt;- EBest(pa$O, pa$E)                              # cases, expected cases\npa$RR_eb &lt;- eb$estmm                                 # shrunk estimate\n\nk &lt;- with(attr(eb, \"parameters\"), b / a)             # state worth k expected cases\nk\n\n\n[1] 107.908\n\n\nCode\npa$w &lt;- pa$E / (pa$E + k)                            # trust in own SIR\n\n\nThe state average is worth about 108 expected cases. Here are five counties, from small to large:\n\n\nCode\npa |&gt;\n  st_drop_geometry() |&gt;\n  filter(county %in% c(\"sullivan\", \"potter\", \"venango\", \"lehigh\", \"philadelphia\")) |&gt;\n  arrange(E) |&gt;\n  transmute(county, E = round(E), SIR = round(SIR, 2),\n            w = round(w, 2), estimate = round(RR_eb, 2))\n\n\n        county    E  SIR    w estimate\n1     sullivan    7 0.40 0.06     0.96\n2       potter   16 1.37 0.13     1.05\n3      venango   51 1.37 0.32     1.12\n4       lehigh  260 0.97 0.71     0.98\n5 philadelphia 1219 1.16 0.92     1.15\n\n\nSullivan expects 7 cases against the state’s 108: we trust its SIR only 6%, and its estimate is almost the state’s. Philadelphia, with more than 1,200 expected cases, keeps 92% of its SIR. Potter and Venango have the same SIR, 1.37, like two restaurants with the same average, but Venango rests on three times more cases, so it stays higher: 1.12 against 1.05."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#where-do-we-borrow",
+    "href": "BSTA374_Lecture_BayesINLA.html#where-do-we-borrow",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "Where do we borrow?",
+    "text": "Where do we borrow?\n\n\nCode\nggplot(pa) +\n  geom_sf(aes(fill = w), colour = \"white\", linewidth = 0.2) +\n  scale_fill_distiller(palette = \"Purples\", direction = 1, limits = c(0, 1),\n                       name = \"Trust w\") +\n  theme_void(base_size = 12)\n\n\n\n\n\n\n\n\nFigure 5: Trust in each county’s own SIR. Dark: we keep the county’s SIR. Light: we borrow from the state.\n\n\n\n\n\nThe map of \\(w\\) is a map of population: the rural north and centre borrow the most, the Philadelphia and Pittsburgh areas the least.\n\n\n\n\n\n\nTipKey idea\n\n\n\nSmall counties borrow from the state; big counties keep their own SIR. The data decide how much to borrow."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#three-maps",
+    "href": "BSTA374_Lecture_BayesINLA.html#three-maps",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "Three maps",
+    "text": "Three maps\n\n\nCode\npa |&gt;\n  select(county) |&gt;\n  left_join(select(dat, county, SIR, RR_eb, RR_bym2), by = \"county\") |&gt;\n  pivot_longer(c(SIR, RR_eb, RR_bym2), names_to = \"estimate\", values_to = \"risk\") |&gt;\n  mutate(estimate = factor(estimate, c(\"SIR\", \"RR_eb\", \"RR_bym2\"),\n                           c(\"SIR (raw)\", \"Empirical Bayes\", \"BYM2 (INLA)\"))) |&gt;\n  ggplot() +\n  geom_sf(aes(fill = cut(risk, sir_breaks)), colour = \"white\", linewidth = 0.15) +\n  facet_wrap(~ estimate) +\n  sir_fill +\n  theme_void(base_size = 12) +\n  theme(legend.position = \"bottom\")\n\n\n\n\n\n\n\n\nFigure 6: Raw SIR, empirical Bayes and BYM2. Same colours.\n\n\n\n\n\nThe extreme colours of the raw map, mostly small rural counties, fade. What remains is the broad pattern."
+  },
+  {
+    "objectID": "BSTA374_Lecture_BayesINLA.html#how-sure-are-we-the-exceedance-map",
+    "href": "BSTA374_Lecture_BayesINLA.html#how-sure-are-we-the-exceedance-map",
+    "title": "Bayesian Disease Mapping with R-INLA",
+    "section": "How sure are we? The exceedance map",
+    "text": "How sure are we? The exceedance map\nFor the well we asked: how likely is it that the water is unsafe more than half the time? For each county we ask: how likely is it that its risk is above the state average, \\(P(\\theta &gt; 1)\\)? This is the exceedance probability.\n\n\nCode\ndat$p_exc &lt;- sapply(m2$marginals.fitted.values,\n                    function(m) 1 - inla.pmarginal(1, m))   # P(θ &gt; 1)\n\n\n\n\nCode\nexc_cols &lt;- c(\"Probably lower (&lt; 0.2)\"  = \"#2c7bb6\",\n              \"Uncertain (0.2–0.8)\"     = \"grey90\",\n              \"Probably higher (&gt; 0.8)\" = \"#d7191c\")\n\npa |&gt;\n  select(county) |&gt;\n  left_join(select(dat, county, p_exc), by = \"county\") |&gt;\n  mutate(exc = cut(p_exc, c(0, 0.2, 0.8, 1), labels = names(exc_cols),\n                   include.lowest = TRUE)) |&gt;\n  ggplot() +\n  geom_sf(aes(fill = exc), colour = \"white\", linewidth = 0.2) +\n  scale_fill_manual(values = exc_cols, drop = FALSE, name = NULL) +\n  theme_void(base_size = 12)\n\n\n\n\n\n\n\n\nFigure 7: Probability that each county’s lung cancer risk exceeds the state average (BYM2).\n\n\n\n\n\nCounties probably above average: Allegheny, Bucks, Butler, Delaware, Philadelphia, Venango. Potter, despite its SIR of 1.37, is not among them (\\(P = 0.38\\)): 22 cases are not enough.\n\n\n\n\n\n\nTipKey idea\n\n\n\nINLA does the same shrinkage, borrows from the neighbours, and tells us how sure we are about each county."
+  }
+]
