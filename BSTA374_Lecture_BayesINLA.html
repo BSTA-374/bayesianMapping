@@ -1,0 +1,1508 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="quarto-1.8.25" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+
+<meta name="author" content="Eric M. Delmelle · Lehigh University" />
+
+<title>Bayesian Disease Mapping with R-INLA – Population Health</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+<!-- htmldependencies:E3FAD763 -->
+<script id="quarto-search-options" type="application/json">{
+  "location": "sidebar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "start",
+  "type": "textbox",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+
+  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+  
+  <script>
+    (function () {
+      var script = document.createElement("script");
+      script.type = "text/javascript";
+      script.src  = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js";
+      document.getElementsByTagName("head")[0].appendChild(script);
+    })();
+  </script>
+
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN" && texText && texText.data) {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+</head>
+
+<body>
+
+<div id="quarto-search-results"></div>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation floating overflow-auto">
+    <div id="quarto-toc-target"></div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" ></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Bayesian Disease Mapping with R-INLA</h1>
+<p class="subtitle lead">How much should we trust a number?</p>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    <div>
+    <div class="quarto-title-meta-heading">Author</div>
+    <div class="quarto-title-meta-contents">
+             <p>Eric M. Delmelle · Lehigh University </p>
+          </div>
+  </div>
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+<nav id="TOC" role="doc-toc">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#today" id="toc-today">Today</a></li>
+  <li><a href="#the-bayesian-idea-in-one-example" id="toc-the-bayesian-idea-in-one-example">The Bayesian idea in one example</a>
+  <ul>
+  <li><a href="#two-restaurants" id="toc-two-restaurants">Two restaurants</a></li>
+  <li><a href="#the-best-guess-is-an-average" id="toc-the-best-guess-is-an-average">The best guess is an average</a></li>
+  <li><a href="#more-reviews-less-shrinkage" id="toc-more-reviews-less-shrinkage">More reviews, less shrinkage</a></li>
+  </ul></li>
+  <li><a href="#learning-one-test-at-a-time-is-the-well-water-safe" id="toc-learning-one-test-at-a-time-is-the-well-water-safe">Learning one test at a time: is the well water safe?</a>
+  <ul>
+  <li><a href="#the-story" id="toc-the-story">The story</a></li>
+  <li><a href="#watching-the-posterior-learn" id="toc-watching-the-posterior-learn">Watching the posterior learn</a></li>
+  <li><a href="#what-do-we-know-after-ten-tests" id="toc-what-do-we-know-after-ten-tests">What do we know after ten tests?</a></li>
+  </ul></li>
+  <li><a href="#counties-why-small-counties-need-help" id="toc-counties-why-small-counties-need-help">Counties: why small counties need help</a>
+  <ul>
+  <li><a href="#the-data" id="toc-the-data">The data</a></li>
+  <li><a href="#the-sir-map" id="toc-the-sir-map">The SIR map</a></li>
+  <li><a href="#the-funnel-plot" id="toc-the-funnel-plot">The funnel plot</a></li>
+  </ul></li>
+  <li><a href="#shrinkage-the-restaurant-formula-for-counties" id="toc-shrinkage-the-restaurant-formula-for-counties">Shrinkage: the restaurant formula for counties</a>
+  <ul>
+  <li><a href="#same-formula-new-names" id="toc-same-formula-new-names">Same formula, new names</a></li>
+  <li><a href="#who-decides-k-the-data" id="toc-who-decides-k-the-data">Who decides <span class="math inline">\(k\)</span>? The data</a></li>
+  <li><a href="#where-do-we-borrow" id="toc-where-do-we-borrow">Where do we borrow?</a></li>
+  </ul></li>
+  <li><a href="#full-bayes-with-r-inla" id="toc-full-bayes-with-r-inla">Full Bayes with R-INLA</a>
+  <ul>
+  <li><a href="#how-does-inla-get-a-credible-interval" id="toc-how-does-inla-get-a-credible-interval">How does INLA get a credible interval?</a></li>
+  <li><a href="#three-maps" id="toc-three-maps">Three maps</a></li>
+  <li><a href="#how-sure-are-we-the-exceedance-map" id="toc-how-sure-are-we-the-exceedance-map">How sure are we? The exceedance map</a></li>
+  </ul></li>
+  <li><a href="#in-class-exercise" id="toc-in-class-exercise">In-class exercise</a></li>
+  <li><a href="#key-takeaways" id="toc-key-takeaways">Key takeaways</a></li>
+  <li><a href="#words-to-know" id="toc-words-to-know">Words to know</a></li>
+  <li><a href="#references" id="toc-references">References</a></li>
+  </ul>
+</nav>
+<section id="today" class="level2 unnumbered">
+<h2 class="unnumbered">Today</h2>
+<p>Some numbers rest on a lot of data, some on very little. Today we learn the Bayesian way of taking that into account, first with restaurants and a well, then with lung cancer in Pennsylvania. Reading: <strong>Moraga Ch. 3, 4 and §5.1–5.3</strong>.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class='callout-icon'></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>By the end of today you can
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<ol type="1">
+<li>explain <em>prior</em>, <em>data</em> and <em>posterior</em> with an everyday example;</li>
+<li>explain why the SIR of a small county is unreliable;</li>
+<li>say what <em>shrinkage</em> does, and to which counties;</li>
+<li>read a smoothed map and an exceedance map made with R-INLA.</li>
+</ol>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode" id="cb1"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(sf)</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(dplyr)</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tidyr)</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(ggplot2)</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(patchwork)</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(spdep)</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(SpatialEpi)   <span class="co"># pennLC</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(INLA)</span></code></pre></div>
+</div>
+<div class="callout callout-style-default callout-warning callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class='callout-icon'></i>
+</div>
+<div class="callout-title-container flex-fill">
+Warning
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>Install INLA before class.</strong> It is not on CRAN:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">install.packages</span>(<span class="st">&quot;INLA&quot;</span>,</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">repos =</span> <span class="fu">c</span>(<span class="fu">getOption</span>(<span class="st">&quot;repos&quot;</span>), <span class="at">INLA =</span> <span class="st">&quot;https://inla.r-inla-download.org/R/stable&quot;</span>))</span></code></pre></div>
+</div>
+</div>
+</section>
+<section id="the-bayesian-idea-in-one-example" class="level1">
+<h1>The Bayesian idea in one example</h1>
+<section id="two-restaurants" class="level2">
+<h2>Two restaurants</h2>
+<table class="caption-top">
+<thead>
+<tr class="header">
+<th></th>
+<th>Number of reviews</th>
+<th>Average rating</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Restaurant A</td>
+<td>2</td>
+<td>5.0 ★</td>
+</tr>
+<tr class="even">
+<td>Restaurant B</td>
+<td>800</td>
+<td>4.7 ★</td>
+</tr>
+</tbody>
+</table>
+<p>Which one would you pick? Most people pick B, even though A has the higher average: two five-star reviews could come from the owner’s friends. Without noticing, you did three things.</p>
+<ol type="1">
+<li>You started from what you know about restaurants in general: a typical one gets about 4.0 stars. That is the <strong>prior</strong>.</li>
+<li>You looked at each restaurant’s own reviews. That is the <strong>data</strong>.</li>
+<li>You combined the two, trusting the reviews more when there are many. That is the <strong>posterior</strong>, your best guess.</li>
+</ol>
+</section>
+<section id="the-best-guess-is-an-average" class="level2">
+<h2>The best guess is an average</h2>
+<p>Where does the prior come from? Recently, <strong>10 people</strong> tried restaurants in the area, and their average rating was <strong>4.0 stars</strong>. We <strong>borrow</strong> these 10 ratings and add them to each restaurant’s own reviews; the best guess is the average of all the ratings, borrowed and own. With <span class="math inline">\(n\)</span> own reviews,</p>
+<p><span class="math display">\[
+\text{best guess} \;=\; \frac{\text{total stars}}{\text{total ratings}}
+\;=\; \frac{10 \times 4.0 \;+\; n \times \text{its average}}{10 + n}.
+\]</span></p>
+<p>Two or three own reviews cannot overturn the 10 borrowed ratings; a few dozen can. The same best guess is a weighted average,</p>
+<p><span class="math display">\[
+\text{best guess} \;=\; w \times \text{its average} \;+\; (1 - w) \times 4.0,
+\qquad w = \frac{n}{n + 10},
+\]</span></p>
+<p>where <span class="math inline">\(w\)</span> is the <strong>share of its own reviews</strong>: how much we <strong>trust its own reviews</strong>, between 0 and 1. In R:</p>
+<div class="cell">
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>best_guess <span class="ot">&lt;-</span> <span class="cf">function</span>(reviews, average, <span class="at">prior_mean =</span> <span class="fl">4.0</span>, <span class="at">borrowed =</span> <span class="dv">10</span>) {</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  w <span class="ot">&lt;-</span> reviews <span class="sc">/</span> (reviews <span class="sc">+</span> borrowed)           <span class="co"># share of its own reviews</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  w <span class="sc">*</span> average <span class="sc">+</span> (<span class="dv">1</span> <span class="sc">-</span> w) <span class="sc">*</span> prior_mean            <span class="co"># weighted average</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="fu">best_guess</span>(<span class="at">reviews =</span> <span class="dv">2</span>,   <span class="at">average =</span> <span class="fl">5.0</span>)        <span class="co"># Restaurant A</span></span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 4.166667</code></pre>
+</div>
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">best_guess</span>(<span class="at">reviews =</span> <span class="dv">800</span>, <span class="at">average =</span> <span class="fl">4.7</span>)        <span class="co"># Restaurant B</span></span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 4.691358</code></pre>
+</div>
+</div>
+<p>Restaurant A’s 5.0 is pulled back to 4.17: two reviews are not enough to convince us. B barely moves, to 4.69. Pulling an estimate toward the average is called <strong>shrinkage</strong>.</p>
+</section>
+<section id="more-reviews-less-shrinkage" class="level2">
+<h2>More reviews, less shrinkage</h2>
+<p>What if A kept getting five-star reviews?</p>
+<div class="cell">
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tibble</span>(<span class="at">reviews =</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">5</span>, <span class="dv">10</span>, <span class="dv">50</span>, <span class="dv">100</span>, <span class="dv">800</span>)) <span class="sc">|&gt;</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">w          =</span> <span class="fu">round</span>(reviews <span class="sc">/</span> (reviews <span class="sc">+</span> <span class="dv">10</span>), <span class="dv">2</span>),   <span class="co"># share of its own reviews</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>         <span class="at">best_guess =</span> <span class="fu">round</span>(<span class="fu">best_guess</span>(reviews, <span class="fl">5.0</span>), <span class="dv">2</span>))</span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code># A tibble: 7 × 3
+  reviews     w best_guess
+    &lt;dbl&gt; &lt;dbl&gt;      &lt;dbl&gt;
+1       1  0.09       4.09
+2       2  0.17       4.17
+3       5  0.33       4.33
+4      10  0.5        4.5 
+5      50  0.83       4.83
+6     100  0.91       4.91
+7     800  0.99       4.99</code></pre>
+</div>
+</div>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tibble</span>(<span class="at">reviews =</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">1000</span>) <span class="sc">|&gt;</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">guess =</span> <span class="fu">best_guess</span>(reviews, <span class="fl">5.0</span>)) <span class="sc">|&gt;</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ggplot</span>(<span class="fu">aes</span>(reviews, guess)) <span class="sc">+</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_hline</span>(<span class="at">yintercept =</span> <span class="fu">c</span>(<span class="dv">4</span>, <span class="dv">5</span>), <span class="at">linetype =</span> <span class="dv">2</span>, <span class="at">colour =</span> <span class="st">&quot;grey50&quot;</span>) <span class="sc">+</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">annotate</span>(<span class="st">&quot;text&quot;</span>, <span class="at">x =</span> <span class="dv">1</span>, <span class="at">y =</span> <span class="fu">c</span>(<span class="fl">3.95</span>, <span class="fl">5.05</span>), <span class="at">hjust =</span> <span class="dv">0</span>, <span class="at">size =</span> <span class="fl">3.5</span>,</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>           <span class="at">label =</span> <span class="fu">c</span>(<span class="st">&quot;prior: a typical restaurant (4.0)&quot;</span>, <span class="st">&quot;its own reviews (5.0)&quot;</span>)) <span class="sc">+</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>(<span class="at">linewidth =</span> <span class="fl">1.2</span>, <span class="at">colour =</span> <span class="st">&quot;darkgreen&quot;</span>) <span class="sc">+</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_point</span>(<span class="at">data =</span> <span class="fu">tibble</span>(<span class="at">reviews =</span> <span class="dv">2</span>, <span class="at">guess =</span> <span class="fu">best_guess</span>(<span class="dv">2</span>, <span class="fl">5.0</span>)), <span class="at">size =</span> <span class="dv">3</span>) <span class="sc">+</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">annotate</span>(<span class="st">&quot;text&quot;</span>, <span class="at">x =</span> <span class="fl">2.4</span>, <span class="at">y =</span> <span class="fu">best_guess</span>(<span class="dv">2</span>, <span class="fl">5.0</span>), <span class="at">label =</span> <span class="st">&quot;Restaurant A&quot;</span>,</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>           <span class="at">hjust =</span> <span class="dv">0</span>, <span class="at">vjust =</span> <span class="fl">1.6</span>, <span class="at">size =</span> <span class="fl">3.5</span>) <span class="sc">+</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">scale_x_log10</span>() <span class="sc">+</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">x =</span> <span class="st">&quot;Number of reviews (log scale)&quot;</span>, <span class="at">y =</span> <span class="st">&quot;Best guess (stars)&quot;</span>) <span class="sc">+</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_classic</span>(<span class="at">base_size =</span> <span class="dv">12</span>)</span></code></pre></div>
+</details>
+<div class="cell-output-display">
+<div id="fig-restaurants" class="quarto-float quarto-figure quarto-figure-center">
+<figure class="quarto-float quarto-float-fig">
+<div aria-describedby="fig-restaurants-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="BSTA374_Lecture_BayesINLA_files/figure-html/fig-restaurants-1.png" class="img-fluid" width="672" />
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-restaurants-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 1: Best guess for a restaurant whose reviews all give 5.0 stars, as reviews accumulate.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>With 2 reviews, the guess stays close to the prior. With 10 own reviews, as many as the borrowed ones, it sits exactly halfway. With hundreds, the prior hardly matters.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class='callout-icon'></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Tip</span>Key idea
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>The posterior is a compromise between the prior and the data. The more data, the more the data win.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="learning-one-test-at-a-time-is-the-well-water-safe" class="level1">
+<h1>Learning one test at a time: is the well water safe?</h1>
+<section id="the-story" class="level2">
+<h2>The story</h2>
+<p>A family tests its well for arsenic ten times. The EPA limit is 10 µg/L. Their question: <strong>how often is this water above the limit?</strong> Call that share <span class="math inline">\(\theta\)</span>: <span class="math inline">\(\theta = 0.2\)</span> means unsafe one test in five.</p>
+<div class="cell">
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>epa   <span class="ot">&lt;-</span> <span class="dv">10</span>                                          <span class="co"># EPA limit, µg/L</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>conc  <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">14</span>, <span class="dv">7</span>, <span class="dv">12</span>, <span class="dv">18</span>, <span class="dv">11</span>, <span class="dv">15</span>, <span class="dv">9</span>, <span class="dv">13</span>, <span class="dv">14</span>, <span class="dv">14</span>)     <span class="co"># 10 tests (illustrative)</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>above <span class="ot">&lt;-</span> <span class="fu">as.integer</span>(conc <span class="sc">&gt;</span> epa)                      <span class="co"># 1 = above, 0 = below</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>above</span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code> [1] 1 0 1 1 1 1 0 1 1 1</code></pre>
+</div>
+</div>
+<p>We do not start from nothing. In nearby wells, about <strong>half</strong> of past tests were above the limit: 5 of 10. That is our <strong>prior</strong>, centred on <span class="math inline">\(\theta = 0.5\)</span>. A Beta curve keeps the score: Beta(5, 5) means 10 tests borrowed from the neighbours, 5 above and 5 below. Each new test above the limit adds 1 to the first number, each test below adds 1 to the second.</p>
+</section>
+<section id="watching-the-posterior-learn" class="level2">
+<h2>Watching the posterior learn</h2>
+<p>In each panel, red dotted is what we believed <strong>before</strong> the test, green is what we believe <strong>after</strong>.</p>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>plot_update <span class="ot">&lt;-</span> <span class="cf">function</span>(a, b, x, n, <span class="at">title =</span> <span class="st">&quot;&quot;</span>) {</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  theta <span class="ot">&lt;-</span> <span class="fu">seq</span>(<span class="dv">0</span>, <span class="dv">1</span>, <span class="fl">0.001</span>)</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">plot</span>(theta, <span class="fu">dbeta</span>(theta, a, b), <span class="at">type =</span> <span class="st">&quot;l&quot;</span>, <span class="at">lty =</span> <span class="dv">3</span>, <span class="at">lwd =</span> <span class="dv">3</span>, <span class="at">col =</span> <span class="st">&quot;red&quot;</span>,</span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>       <span class="at">ylim =</span> <span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">4</span>), <span class="at">bty =</span> <span class="st">&quot;l&quot;</span>, <span class="at">xlab =</span> <span class="fu">expression</span>(theta), <span class="at">ylab =</span> <span class="st">&quot;&quot;</span>,</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>       <span class="at">main =</span> title)                                            <span class="co"># before</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (n <span class="sc">&gt;</span> <span class="dv">0</span>)                                                    <span class="co"># no test, no update</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">lines</span>(theta, <span class="fu">dbeta</span>(theta, a <span class="sc">+</span> x, b <span class="sc">+</span> n <span class="sc">-</span> x), <span class="at">lwd =</span> <span class="dv">3</span>, <span class="at">col =</span> <span class="st">&quot;darkgreen&quot;</span>)  <span class="co"># after</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+</details>
+</div>
+<div class="cell">
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="fu">par</span>(<span class="at">mfrow =</span> <span class="fu">c</span>(<span class="dv">3</span>, <span class="dv">4</span>), <span class="at">mar =</span> <span class="fu">c</span>(<span class="dv">4</span>, <span class="dv">2</span>, <span class="dv">2</span>, <span class="dv">1</span>))</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>a <span class="ot">&lt;-</span> <span class="dv">5</span>; b <span class="ot">&lt;-</span> <span class="dv">5</span>                                      <span class="co"># prior: 5 of 10 above in nearby wells</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="fu">plot_update</span>(a, b, <span class="dv">0</span>, <span class="dv">0</span>, <span class="at">title =</span> <span class="st">&quot;Before testing: nearby wells&quot;</span>)</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (i <span class="cf">in</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>) {</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">plot_update</span>(a, b, above[i], <span class="dv">1</span>,</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>              <span class="at">title =</span> <span class="fu">paste0</span>(<span class="st">&quot;#&quot;</span>, i, <span class="st">&quot;: &quot;</span>, conc[i], <span class="st">&quot; ug/L&quot;</span>,</span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>                             <span class="fu">ifelse</span>(above[i] <span class="sc">==</span> <span class="dv">1</span>, <span class="st">&quot; (above)&quot;</span>, <span class="st">&quot; (below)&quot;</span>)))</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>  a <span class="ot">&lt;-</span> a <span class="sc">+</span> above[i]                                 <span class="co"># after ...</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>  b <span class="ot">&lt;-</span> b <span class="sc">+</span> <span class="dv">1</span> <span class="sc">-</span> above[i]                             <span class="co"># ... becomes next before</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+</details>
+<div class="cell-output-display">
+<div id="fig-seq-chain" class="quarto-float quarto-figure quarto-figure-center">
+<figure class="quarto-float quarto-float-fig">
+<div aria-describedby="fig-seq-chain-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="BSTA374_Lecture_BayesINLA_files/figure-html/fig-seq-chain-1.png" class="img-fluid" width="864" />
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-seq-chain-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 2: Each panel starts from the previous panel’s green curve and adds one test.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>Three things to notice:</p>
+<ol type="1">
+<li>A test above the limit pushes the curve right; a test below pushes it left (tests 2 and 7).</li>
+<li>The curve gets <strong>taller and narrower</strong>: more tests, more certainty.</li>
+<li>Each panel’s green curve becomes the next panel’s red curve. That is Bayesian learning.</li>
+</ol>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class='callout-icon'></i>
+</div>
+<div class="callout-title-container flex-fill">
+Note
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>Why does the y-axis stop at 4?</strong> It shows a density, not a probability, so it can exceed 1; the area under each curve is 1. We fix it at 4 so the panels can be compared.</p>
+</div>
+</div>
+</section>
+<section id="what-do-we-know-after-ten-tests" class="level2">
+<h2>What do we know after ten tests?</h2>
+<div class="cell">
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb14"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>a <span class="sc">/</span> (a <span class="sc">+</span> b)                                      <span class="co"># best guess for θ</span></span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 0.65</code></pre>
+</div>
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb16"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">qbeta</span>(<span class="fu">c</span>(<span class="fl">0.025</span>, <span class="fl">0.975</span>), a, b)                     <span class="co"># 95% credible interval</span></span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 0.4344984 0.8371141</code></pre>
+</div>
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb18"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="dv">1</span> <span class="sc">-</span> <span class="fu">pbeta</span>(<span class="fl">0.5</span>, a, b)                             <span class="co"># P(unsafe more than half the time)</span></span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 0.9164658</code></pre>
+</div>
+</div>
+<p>Our best guess is that the water is above the limit about 65% of the time, and with 95% probability between 43% and 84% (the <strong>credible interval</strong>). The probability that it is unsafe more than half the time is 0.92. Bayesian results answer the family’s question directly, as a probability.</p>
+<p>Where does 65% come from? The well’s own tests say 8 of 10, 80%. The nearby wells say 50%. The 10 borrowed tests and the well’s own 10 count equally, so the answer sits halfway. It is the restaurant formula again:</p>
+<p><span class="math display">\[
+0.65 \;=\; w \times 0.80
+\;+\; (1 - w) \times 0.50,
+\qquad w = \frac{10}{10 + 10} = 0.5.
+\]</span></p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class='callout-icon'></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Tip</span>Key idea
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>We start from what we already know, here the nearby wells, and each new test updates it. More data, a narrower curve, more certainty.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="counties-why-small-counties-need-help" class="level1">
+<h1>Counties: why small counties need help</h1>
+<section id="the-data" class="level2">
+<h2>The data</h2>
+<p>We rebuild the Pennsylvania lung cancer counts from the SIR lecture: <span class="math inline">\(O\)</span> observed cases, <span class="math inline">\(E\)</span> expected cases, and SIR <span class="math inline">\(= O/E\)</span>.</p>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb20"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="fu">data</span>(pennLC)</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>d <span class="ot">&lt;-</span> pennLC<span class="sc">$</span>data</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>ref <span class="ot">&lt;-</span> d <span class="sc">|&gt;</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">group_by</span>(race, gender, age) <span class="sc">|&gt;</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">summarise</span>(<span class="at">r =</span> <span class="fu">sum</span>(cases) <span class="sc">/</span> <span class="fu">sum</span>(population), <span class="at">.groups =</span> <span class="st">&quot;drop&quot;</span>)   <span class="co"># reference rates</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>county <span class="ot">&lt;-</span> d <span class="sc">|&gt;</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">left_join</span>(ref, <span class="at">by =</span> <span class="fu">c</span>(<span class="st">&quot;race&quot;</span>, <span class="st">&quot;gender&quot;</span>, <span class="st">&quot;age&quot;</span>)) <span class="sc">|&gt;</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">group_by</span>(county) <span class="sc">|&gt;</span></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">summarise</span>(<span class="at">O =</span> <span class="fu">sum</span>(cases), <span class="at">E =</span> <span class="fu">sum</span>(population <span class="sc">*</span> r), <span class="at">.groups =</span> <span class="st">&quot;drop&quot;</span>) <span class="sc">|&gt;</span></span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">county =</span> <span class="fu">as.character</span>(county), <span class="at">SIR =</span> O <span class="sc">/</span> E)</span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>pa <span class="ot">&lt;-</span> <span class="fu">st_as_sf</span>(pennLC<span class="sc">$</span>spatial.polygon) <span class="sc">|&gt;</span></span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">st_set_crs</span>(<span class="dv">4326</span>) <span class="sc">|&gt;</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">county =</span> <span class="fu">names</span>(pennLC<span class="sc">$</span>spatial.polygon)) <span class="sc">|&gt;</span></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">st_transform</span>(<span class="dv">5070</span>) <span class="sc">|&gt;</span>                                           <span class="co"># Albers</span></span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a>  <span class="fu">left_join</span>(county, <span class="at">by =</span> <span class="st">&quot;county&quot;</span>)</span>
+<span id="cb20-19"><a href="#cb20-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-20"><a href="#cb20-20" aria-hidden="true" tabindex="-1"></a>sir_breaks <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">0</span>, <span class="fl">0.67</span>, <span class="fl">0.83</span>, <span class="fl">0.95</span>, <span class="fl">1.05</span>, <span class="fl">1.2</span>, <span class="fl">1.5</span>, <span class="cn">Inf</span>)</span>
+<span id="cb20-21"><a href="#cb20-21" aria-hidden="true" tabindex="-1"></a>sir_fill   <span class="ot">&lt;-</span> <span class="fu">scale_fill_brewer</span>(<span class="at">palette =</span> <span class="st">&quot;RdBu&quot;</span>, <span class="at">direction =</span> <span class="sc">-</span><span class="dv">1</span>, <span class="at">drop =</span> <span class="cn">FALSE</span>, <span class="at">name =</span> <span class="st">&quot;Risk&quot;</span>)</span></code></pre></div>
+</details>
+</div>
+</section>
+<section id="the-sir-map" class="level2">
+<h2>The SIR map</h2>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb21"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(pa) <span class="sc">+</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_sf</span>(<span class="fu">aes</span>(<span class="at">fill =</span> <span class="fu">cut</span>(SIR, sir_breaks)), <span class="at">colour =</span> <span class="st">&quot;white&quot;</span>, <span class="at">linewidth =</span> <span class="fl">0.2</span>) <span class="sc">+</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  sir_fill <span class="sc">+</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_void</span>(<span class="at">base_size =</span> <span class="dv">12</span>)</span></code></pre></div>
+</details>
+<div class="cell-output-display">
+<div id="fig-sir" class="quarto-float quarto-figure quarto-figure-center">
+<figure class="quarto-float quarto-float-fig">
+<div aria-describedby="fig-sir-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="BSTA374_Lecture_BayesINLA_files/figure-html/fig-sir-1.png" class="img-fluid" width="672" />
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-sir-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 3: Lung cancer SIRs, Pennsylvania counties.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>Which counties have the most extreme SIRs?</p>
+<div class="cell">
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb22"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>extremes <span class="ot">&lt;-</span> county <span class="sc">|&gt;</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">arrange</span>(SIR) <span class="sc">|&gt;</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">slice</span>(<span class="fu">c</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">3</span>, <span class="dv">65</span><span class="sc">:</span><span class="dv">67</span>)) <span class="sc">|&gt;</span>                           <span class="co"># 3 lowest, 3 highest</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">E =</span> <span class="fu">round</span>(E, <span class="dv">1</span>), <span class="at">SIR =</span> <span class="fu">round</span>(SIR, <span class="dv">2</span>))</span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>extremes</span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code># A tibble: 6 × 4
+  county       O     E   SIR
+  &lt;chr&gt;    &lt;int&gt; &lt;dbl&gt; &lt;dbl&gt;
+1 juniata      6  18.7  0.32
+2 sullivan     3   7.4  0.4 
+3 montour      8  16.1  0.5 
+4 cameron      8   5.9  1.35
+5 venango     70  51.1  1.37
+6 potter      22  16    1.37</code></pre>
+</div>
+</div>
+<p>Of these six counties, 5 expect fewer than 20 cases; the median county expects 75. A few cases more or less move their SIR a lot. Small counties are like restaurants with two reviews.</p>
+</section>
+<section id="the-funnel-plot" class="level2">
+<h2>The funnel plot</h2>
+<p>How far can an SIR stray by chance alone? If a county’s true risk were exactly the state’s, its SIR would still fall, about 95% of the time, within <span class="math inline">\(1 \pm 1.96/\sqrt{E}\)</span>. Plotted against <span class="math inline">\(E\)</span>, that range is a funnel.</p>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb24"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>funnel <span class="ot">&lt;-</span> <span class="fu">tibble</span>(<span class="at">E =</span> <span class="fu">exp</span>(<span class="fu">seq</span>(<span class="fu">log</span>(<span class="dv">4</span>), <span class="fu">log</span>(<span class="dv">1500</span>), <span class="at">length.out =</span> <span class="dv">200</span>))) <span class="sc">|&gt;</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">lo =</span> <span class="dv">1</span> <span class="sc">-</span> <span class="fl">1.96</span> <span class="sc">/</span> <span class="fu">sqrt</span>(E),                   <span class="co"># chance range of the SIR</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>         <span class="at">hi =</span> <span class="dv">1</span> <span class="sc">+</span> <span class="fl">1.96</span> <span class="sc">/</span> <span class="fu">sqrt</span>(E))</span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>labelled <span class="ot">&lt;-</span> <span class="fu">filter</span>(county, county <span class="sc">%in%</span> <span class="fu">c</span>(<span class="st">&quot;sullivan&quot;</span>, <span class="st">&quot;potter&quot;</span>, <span class="st">&quot;juniata&quot;</span>, <span class="st">&quot;philadelphia&quot;</span>))</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>() <span class="sc">+</span></span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_ribbon</span>(<span class="at">data =</span> funnel, <span class="fu">aes</span>(E, <span class="at">ymin =</span> lo, <span class="at">ymax =</span> hi), <span class="at">fill =</span> <span class="st">&quot;grey85&quot;</span>) <span class="sc">+</span></span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_hline</span>(<span class="at">yintercept =</span> <span class="dv">1</span>, <span class="at">colour =</span> <span class="st">&quot;grey50&quot;</span>) <span class="sc">+</span></span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_point</span>(<span class="at">data =</span> county, <span class="fu">aes</span>(E, SIR)) <span class="sc">+</span></span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_text</span>(<span class="at">data =</span> labelled, <span class="fu">aes</span>(E, SIR, <span class="at">label =</span> tools<span class="sc">::</span><span class="fu">toTitleCase</span>(county)),</span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a>            <span class="at">nudge_y =</span> <span class="fl">0.07</span>, <span class="at">size =</span> <span class="fl">3.5</span>) <span class="sc">+</span></span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">scale_x_log10</span>() <span class="sc">+</span></span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">x =</span> <span class="st">&quot;Expected cases (log scale)&quot;</span>, <span class="at">y =</span> <span class="st">&quot;SIR&quot;</span>) <span class="sc">+</span></span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_classic</span>(<span class="at">base_size =</span> <span class="dv">12</span>)</span></code></pre></div>
+</details>
+<div class="cell-output-display">
+<div id="fig-funnel" class="quarto-float quarto-figure quarto-figure-center">
+<figure class="quarto-float quarto-float-fig">
+<div aria-describedby="fig-funnel-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="BSTA374_Lecture_BayesINLA_files/figure-html/fig-funnel-1.png" class="img-fluid" width="672" />
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-funnel-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 4: SIRs against expected cases. Grey: where about 95% of SIRs fall by chance alone.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>The funnel is wide on the left. Potter’s 1.37 and Sullivan’s 0.40 sit inside it: they could be chance. Philadelphia’s 1.16 is far outside: with more than 1,200 expected cases, a 16% excess is not chance.</p>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class='callout-icon'></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Important</span>The problem in one sentence
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>A raw SIR mixes real differences in risk with chance, and chance is largest in small counties.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="shrinkage-the-restaurant-formula-for-counties" class="level1">
+<h1>Shrinkage: the restaurant formula for counties</h1>
+<section id="same-formula-new-names" class="level2">
+<h2>Same formula, new names</h2>
+<table class="caption-top">
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Restaurants</th>
+<th>Counties</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>number of reviews</td>
+<td>expected cases <span class="math inline">\(E\)</span></td>
+</tr>
+<tr class="even">
+<td>its average rating</td>
+<td>its SIR</td>
+</tr>
+<tr class="odd">
+<td>a typical restaurant, 4.0</td>
+<td>the state average, 1</td>
+</tr>
+<tr class="even">
+<td>10 borrowed ratings, average 4.0</td>
+<td><span class="math inline">\(k\)</span> borrowed expected cases at the state rate</td>
+</tr>
+<tr class="odd">
+<td>trust in its own reviews, <span class="math inline">\(w\)</span></td>
+<td>trust in its own SIR, <span class="math inline">\(w\)</span></td>
+</tr>
+</tbody>
+</table>
+<p>So each county gets</p>
+<p><span class="math display">\[
+\text{estimate} \;=\; w \times \text{SIR} \;+\; (1 - w) \times 1,
+\qquad w = \frac{E}{E + k}.
+\]</span></p>
+<p>A big county (large <span class="math inline">\(E\)</span>) keeps its SIR. A small county borrows from the state.</p>
+</section>
+<section id="who-decides-k-the-data" class="level2">
+<h2>Who decides <span class="math inline">\(k\)</span>? The data</h2>
+<p>For the restaurants we picked 10 ourselves. For counties, R estimates <span class="math inline">\(k\)</span> from the 67 SIRs:</p>
+<ul>
+<li>if counties differ <strong>much more</strong> than chance alone would produce, real differences are large, we trust each county’s SIR, and <span class="math inline">\(k\)</span> is small;</li>
+<li>if counties differ <strong>about as much</strong> as chance would produce, we trust the state average more, and <span class="math inline">\(k\)</span> is large.</li>
+</ul>
+<p>Letting the data choose the prior this way is called <strong>empirical Bayes</strong> (Clayton and Kaldor 1987; Marshall 1991). <code>EBest()</code> in <strong>spdep</strong> does it in one line.</p>
+<div class="cell">
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb25"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>eb <span class="ot">&lt;-</span> <span class="fu">EBest</span>(pa<span class="sc">$</span>O, pa<span class="sc">$</span>E)                              <span class="co"># cases, expected cases</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>pa<span class="sc">$</span>RR_eb <span class="ot">&lt;-</span> eb<span class="sc">$</span>estmm                                 <span class="co"># shrunk estimate</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>k <span class="ot">&lt;-</span> <span class="fu">with</span>(<span class="fu">attr</span>(eb, <span class="st">&quot;parameters&quot;</span>), b <span class="sc">/</span> a)             <span class="co"># k borrowed expected cases</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>k</span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 107.908</code></pre>
+</div>
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb27"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>pa<span class="sc">$</span>w <span class="ot">&lt;-</span> pa<span class="sc">$</span>E <span class="sc">/</span> (pa<span class="sc">$</span>E <span class="sc">+</span> k)                            <span class="co"># trust in own SIR</span></span></code></pre></div>
+</details>
+</div>
+<p>Each county borrows about 108 expected cases at the state rate. Here are five counties, from small to large:</p>
+<div class="cell">
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb28"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a>pa <span class="sc">|&gt;</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">st_drop_geometry</span>() <span class="sc">|&gt;</span></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">filter</span>(county <span class="sc">%in%</span> <span class="fu">c</span>(<span class="st">&quot;sullivan&quot;</span>, <span class="st">&quot;potter&quot;</span>, <span class="st">&quot;venango&quot;</span>, <span class="st">&quot;lehigh&quot;</span>, <span class="st">&quot;philadelphia&quot;</span>)) <span class="sc">|&gt;</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">arrange</span>(E) <span class="sc">|&gt;</span></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">transmute</span>(county, <span class="at">E =</span> <span class="fu">round</span>(E), <span class="at">SIR =</span> <span class="fu">round</span>(SIR, <span class="dv">2</span>),</span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>            <span class="at">w =</span> <span class="fu">round</span>(w, <span class="dv">2</span>), <span class="at">estimate =</span> <span class="fu">round</span>(RR_eb, <span class="dv">2</span>))</span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>        county    E  SIR    w estimate
+1     sullivan    7 0.40 0.06     0.96
+2       potter   16 1.37 0.13     1.05
+3      venango   51 1.37 0.32     1.12
+4       lehigh  260 0.97 0.71     0.98
+5 philadelphia 1219 1.16 0.92     1.15</code></pre>
+</div>
+</div>
+<p>Sullivan’s own 7 expected cases are mixed with 108 borrowed ones: we trust its SIR only 6%, and its estimate is almost the state’s. Philadelphia, with more than 1,200 expected cases, keeps 92% of its SIR. Potter and Venango have the same SIR, 1.37, like two restaurants with the same average, but Venango rests on three times more cases, so it stays higher: 1.12 against 1.05.</p>
+</section>
+<section id="where-do-we-borrow" class="level2">
+<h2>Where do we borrow?</h2>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb30"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(pa) <span class="sc">+</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_sf</span>(<span class="fu">aes</span>(<span class="at">fill =</span> w), <span class="at">colour =</span> <span class="st">&quot;white&quot;</span>, <span class="at">linewidth =</span> <span class="fl">0.2</span>) <span class="sc">+</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">scale_fill_distiller</span>(<span class="at">palette =</span> <span class="st">&quot;Purples&quot;</span>, <span class="at">direction =</span> <span class="dv">1</span>, <span class="at">limits =</span> <span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">1</span>),</span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>                       <span class="at">name =</span> <span class="st">&quot;Trust w&quot;</span>) <span class="sc">+</span></span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_void</span>(<span class="at">base_size =</span> <span class="dv">12</span>)</span></code></pre></div>
+</details>
+<div class="cell-output-display">
+<div id="fig-weights" class="quarto-float quarto-figure quarto-figure-center">
+<figure class="quarto-float quarto-float-fig">
+<div aria-describedby="fig-weights-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="BSTA374_Lecture_BayesINLA_files/figure-html/fig-weights-1.png" class="img-fluid" width="672" />
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-weights-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 5: Trust in each county’s own SIR. Dark: we keep the county’s SIR. Light: we borrow from the state.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>The map of <span class="math inline">\(w\)</span> is a map of population: the rural north and centre borrow the most, the Philadelphia and Pittsburgh areas the least.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class='callout-icon'></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Tip</span>Key idea
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Small counties borrow from the state; big counties keep their own SIR. The data decide how much to borrow.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="full-bayes-with-r-inla" class="level1">
+<h1>Full Bayes with R-INLA</h1>
+<p>Empirical Bayes gives one number per county. A <strong>full Bayesian</strong> model does the same shrinkage but returns a whole posterior curve per county, like the green curves of the well. That tells us <strong>how sure</strong> we are. INLA is a fast way to fit such models (Moraga Ch. 3–4).</p>
+<p>We use the <strong>BYM2</strong> model (Moraga §5.3). Instead of borrowing from the whole state, each county borrows mostly from its <strong>neighbours</strong>, the way the family borrowed from nearby wells. We use the queen neighbours from the Moran’s I lecture.</p>
+<div class="cell">
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb31"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>dat <span class="ot">&lt;-</span> <span class="fu">st_drop_geometry</span>(pa) <span class="sc">|&gt;</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">id =</span> <span class="fu">row_number</span>())                          <span class="co"># one index per county</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>nb <span class="ot">&lt;-</span> <span class="fu">poly2nb</span>(pa, <span class="at">queen =</span> <span class="cn">TRUE</span>)                      <span class="co"># queen neighbours</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a><span class="fu">nb2INLA</span>(<span class="st">&quot;pa.adj&quot;</span>, nb)                                <span class="co"># write for INLA</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>g  <span class="ot">&lt;-</span> <span class="fu">inla.read.graph</span>(<span class="st">&quot;pa.adj&quot;</span>)</span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>m2 <span class="ot">&lt;-</span> <span class="fu">inla</span>(O <span class="sc">~</span> <span class="dv">1</span> <span class="sc">+</span> <span class="fu">f</span>(id, <span class="at">model =</span> <span class="st">&quot;bym2&quot;</span>, <span class="at">graph =</span> g),</span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>           <span class="at">family =</span> <span class="st">&quot;poisson&quot;</span>, <span class="at">E =</span> E, <span class="at">data =</span> dat,</span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>           <span class="at">control.predictor =</span> <span class="fu">list</span>(<span class="at">compute =</span> <span class="cn">TRUE</span>),</span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>           <span class="at">control.compute =</span> <span class="fu">list</span>(<span class="at">return.marginals.predictor =</span> <span class="cn">TRUE</span>))</span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a>dat<span class="sc">$</span>RR_bym2 <span class="ot">&lt;-</span> m2<span class="sc">$</span>summary.fitted.values<span class="sc">$</span>mean         <span class="co"># posterior mean risk</span></span></code></pre></div>
+</details>
+</div>
+<p>Read the formula as: log-risk = an overall level + a bump for each county that borrows from its neighbours (Moraga §4.1).</p>
+<section id="how-does-inla-get-a-credible-interval" class="level2">
+<h2>How does INLA get a credible interval?</h2>
+<p>For every county, INLA returns a whole <strong>posterior curve</strong> for its relative risk, like the green curves of the well. For the well, a simple formula gave the curve. Here it cannot, because each county borrows from its neighbours, and we do not know <strong>how much</strong> to borrow: that depends on how different the counties really are, which is itself unknown. INLA works in three steps (Moraga §3.2):</p>
+<ol type="1">
+<li><strong>Try several amounts of borrowing.</strong> For each plausible value of how much the counties differ, it computes the county’s curve with a fast bell-shaped (Laplace) approximation.</li>
+<li><strong>Average the curves.</strong> It weights each curve by how well that amount of borrowing fits all 67 counties, and averages them. This is the <em>integrated</em> in INLA.</li>
+<li><strong>Read the final curve.</strong> The posterior mean is its balance point; the 95% credible interval cuts 2.5% of the area off each side; the exceedance probability is the area to the right of 1.</li>
+</ol>
+<p>Here are steps 1 and 2 for Potter. Each dashed curve fixes one amount of borrowing, from little to a lot; the thick grey curve is INLA’s final curve.</p>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb32"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>k   <span class="ot">&lt;-</span> <span class="fu">which</span>(dat<span class="sc">$</span>county <span class="sc">==</span> <span class="st">&quot;potter&quot;</span>)</span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>tau <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">10</span>, m2<span class="sc">$</span>summary.hyperpar[<span class="st">&quot;Precision for id&quot;</span>, <span class="st">&quot;0.5quant&quot;</span>], <span class="dv">1000</span>)   <span class="co"># little, middle, a lot</span></span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>phi <span class="ot">&lt;-</span> m2<span class="sc">$</span>summary.hyperpar[<span class="st">&quot;Phi for id&quot;</span>, <span class="st">&quot;0.5quant&quot;</span>]</span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>fixed_fit <span class="ot">&lt;-</span> <span class="cf">function</span>(t) {                           <span class="co"># BYM2 with borrowing fixed</span></span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>  hyp <span class="ot">&lt;-</span> <span class="fu">list</span>(<span class="at">prec =</span> <span class="fu">list</span>(<span class="at">initial =</span> <span class="fu">log</span>(t),   <span class="at">fixed =</span> <span class="cn">TRUE</span>),</span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>              <span class="at">phi  =</span> <span class="fu">list</span>(<span class="at">initial =</span> <span class="fu">qlogis</span>(phi), <span class="at">fixed =</span> <span class="cn">TRUE</span>))</span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>  m <span class="ot">&lt;-</span> <span class="fu">inla</span>(O <span class="sc">~</span> <span class="dv">1</span> <span class="sc">+</span> <span class="fu">f</span>(id, <span class="at">model =</span> <span class="st">&quot;bym2&quot;</span>, <span class="at">graph =</span> g, <span class="at">hyper =</span> hyp),</span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>            <span class="at">family =</span> <span class="st">&quot;poisson&quot;</span>, <span class="at">E =</span> E, <span class="at">data =</span> dat,</span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>            <span class="at">control.predictor =</span> <span class="fu">list</span>(<span class="at">compute =</span> <span class="cn">TRUE</span>),</span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>            <span class="at">control.compute =</span> <span class="fu">list</span>(<span class="at">return.marginals.predictor =</span> <span class="cn">TRUE</span>))</span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">inla.smarginal</span>(m<span class="sc">$</span>marginals.fitted.values[[k]])     <span class="co"># Potter&#39;s curve</span></span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-15"><a href="#cb32-15" aria-hidden="true" tabindex="-1"></a>lab <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">&quot;borrow little (counties very different)&quot;</span>, <span class="st">&quot;borrow a middle amount&quot;</span>,</span>
+<span id="cb32-16"><a href="#cb32-16" aria-hidden="true" tabindex="-1"></a>         <span class="st">&quot;borrow a lot (counties very similar)&quot;</span>)</span>
+<span id="cb32-17"><a href="#cb32-17" aria-hidden="true" tabindex="-1"></a>steps <span class="ot">&lt;-</span> <span class="fu">bind_rows</span>(<span class="fu">lapply</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">3</span>, <span class="cf">function</span>(j) <span class="fu">data.frame</span>(<span class="fu">fixed_fit</span>(tau[j]), <span class="at">curve =</span> lab[j]))) <span class="sc">|&gt;</span></span>
+<span id="cb32-18"><a href="#cb32-18" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">curve =</span> <span class="fu">factor</span>(curve, lab))</span>
+<span id="cb32-19"><a href="#cb32-19" aria-hidden="true" tabindex="-1"></a>final <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="fu">inla.smarginal</span>(m2<span class="sc">$</span>marginals.fitted.values[[k]]))</span>
+<span id="cb32-20"><a href="#cb32-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-21"><a href="#cb32-21" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>() <span class="sc">+</span></span>
+<span id="cb32-22"><a href="#cb32-22" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>(<span class="at">data =</span> final, <span class="fu">aes</span>(x, y), <span class="at">linewidth =</span> <span class="fl">2.5</span>, <span class="at">alpha =</span> <span class="fl">0.35</span>) <span class="sc">+</span>     <span class="co"># final curve, underneath</span></span>
+<span id="cb32-23"><a href="#cb32-23" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>(<span class="at">data =</span> steps, <span class="fu">aes</span>(x, y, <span class="at">colour =</span> curve), <span class="at">linetype =</span> <span class="dv">2</span>, <span class="at">linewidth =</span> <span class="fl">0.9</span>) <span class="sc">+</span></span>
+<span id="cb32-24"><a href="#cb32-24" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_vline</span>(<span class="at">xintercept =</span> dat<span class="sc">$</span>SIR[k], <span class="at">linetype =</span> <span class="dv">3</span>, <span class="at">colour =</span> <span class="st">&quot;blue&quot;</span>) <span class="sc">+</span></span>
+<span id="cb32-25"><a href="#cb32-25" aria-hidden="true" tabindex="-1"></a>  <span class="fu">annotate</span>(<span class="st">&quot;text&quot;</span>, <span class="at">x =</span> dat<span class="sc">$</span>SIR[k], <span class="at">y =</span> <span class="dv">0</span>, <span class="at">label =</span> <span class="st">&quot; Potter&#39;s SIR&quot;</span>, <span class="at">hjust =</span> <span class="dv">0</span>,</span>
+<span id="cb32-26"><a href="#cb32-26" aria-hidden="true" tabindex="-1"></a>           <span class="at">vjust =</span> <span class="sc">-</span><span class="fl">0.5</span>, <span class="at">colour =</span> <span class="st">&quot;blue&quot;</span>, <span class="at">size =</span> <span class="fl">3.5</span>) <span class="sc">+</span></span>
+<span id="cb32-27"><a href="#cb32-27" aria-hidden="true" tabindex="-1"></a>  <span class="fu">scale_colour_manual</span>(<span class="at">values =</span> <span class="fu">c</span>(<span class="st">&quot;#D95F02&quot;</span>, <span class="st">&quot;#7570B3&quot;</span>, <span class="st">&quot;#1B9E77&quot;</span>), <span class="at">name =</span> <span class="cn">NULL</span>) <span class="sc">+</span></span>
+<span id="cb32-28"><a href="#cb32-28" aria-hidden="true" tabindex="-1"></a>  <span class="fu">coord_cartesian</span>(<span class="at">xlim =</span> <span class="fu">c</span>(<span class="fl">0.5</span>, <span class="fl">1.8</span>)) <span class="sc">+</span></span>
+<span id="cb32-29"><a href="#cb32-29" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">x =</span> <span class="st">&quot;Relative risk, Potter&quot;</span>, <span class="at">y =</span> <span class="st">&quot;Posterior density&quot;</span>) <span class="sc">+</span></span>
+<span id="cb32-30"><a href="#cb32-30" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_classic</span>(<span class="at">base_size =</span> <span class="dv">12</span>) <span class="sc">+</span></span>
+<span id="cb32-31"><a href="#cb32-31" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme</span>(<span class="at">legend.position =</span> <span class="st">&quot;bottom&quot;</span>, <span class="at">legend.direction =</span> <span class="st">&quot;vertical&quot;</span>)</span></code></pre></div>
+</details>
+<div class="cell-output-display">
+<div id="fig-inla-steps" class="quarto-float quarto-figure quarto-figure-center">
+<figure class="quarto-float quarto-float-fig">
+<div aria-describedby="fig-inla-steps-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="BSTA374_Lecture_BayesINLA_files/figure-html/fig-inla-steps-1.png" class="img-fluid" width="672" />
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-inla-steps-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 6: Potter County. Dashed: posterior curves for three fixed amounts of borrowing. Thick grey: INLA’s final curve, which averages over all plausible amounts.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>Borrowing little leaves Potter closer to its own SIR, with a wide curve; borrowing a lot pulls it toward its neighbours, with a narrow curve. The data make the middle amount the most plausible, so the final curve sits close to it. Step 3 then reads the answers off the final curve:</p>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb33"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>LL <span class="ot">&lt;-</span> m2<span class="sc">$</span>summary.fitted.values<span class="sc">$</span><span class="st">`</span><span class="at">0.025quant</span><span class="st">`</span>[k]</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>UL <span class="ot">&lt;-</span> m2<span class="sc">$</span>summary.fitted.values<span class="sc">$</span><span class="st">`</span><span class="at">0.975quant</span><span class="st">`</span>[k]</span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>P1 <span class="ot">&lt;-</span> <span class="dv">1</span> <span class="sc">-</span> <span class="fu">inla.pmarginal</span>(<span class="dv">1</span>, m2<span class="sc">$</span>marginals.fitted.values[[k]])</span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>p_ci <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(final, <span class="fu">aes</span>(x, y)) <span class="sc">+</span></span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_area</span>(<span class="at">data =</span> <span class="fu">filter</span>(final, x <span class="sc">&lt;=</span> LL), <span class="at">fill =</span> <span class="st">&quot;grey70&quot;</span>) <span class="sc">+</span></span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_area</span>(<span class="at">data =</span> <span class="fu">filter</span>(final, x <span class="sc">&gt;=</span> UL), <span class="at">fill =</span> <span class="st">&quot;grey70&quot;</span>) <span class="sc">+</span></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>(<span class="at">colour =</span> <span class="st">&quot;darkgreen&quot;</span>, <span class="at">linewidth =</span> <span class="fl">1.2</span>) <span class="sc">+</span></span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_vline</span>(<span class="at">xintercept =</span> <span class="fu">c</span>(LL, UL), <span class="at">linetype =</span> <span class="dv">2</span>) <span class="sc">+</span></span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">annotate</span>(<span class="st">&quot;text&quot;</span>, <span class="at">x =</span> UL <span class="sc">+</span> <span class="fl">0.04</span>, <span class="at">y =</span> <span class="fu">max</span>(final<span class="sc">$</span>y) <span class="sc">*</span> <span class="fl">0.6</span>, <span class="at">size =</span> <span class="fl">3.5</span>, <span class="at">hjust =</span> <span class="dv">0</span>,</span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>           <span class="at">label =</span> <span class="fu">paste0</span>(<span class="st">&quot;95% credible interval</span><span class="sc">\n</span><span class="st">&quot;</span>, <span class="fu">sprintf</span>(<span class="st">&quot;%.2f&quot;</span>, LL),</span>
+<span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a>                          <span class="st">&quot; to &quot;</span>, <span class="fu">sprintf</span>(<span class="st">&quot;%.2f&quot;</span>, UL))) <span class="sc">+</span></span>
+<span id="cb33-13"><a href="#cb33-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">coord_cartesian</span>(<span class="at">xlim =</span> <span class="fu">c</span>(<span class="fl">0.5</span>, <span class="fl">1.8</span>)) <span class="sc">+</span></span>
+<span id="cb33-14"><a href="#cb33-14" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">&quot;Credible interval&quot;</span>, <span class="at">x =</span> <span class="st">&quot;Relative risk, Potter&quot;</span>, <span class="at">y =</span> <span class="st">&quot;Posterior density&quot;</span>) <span class="sc">+</span></span>
+<span id="cb33-15"><a href="#cb33-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_classic</span>(<span class="at">base_size =</span> <span class="dv">12</span>)</span>
+<span id="cb33-16"><a href="#cb33-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-17"><a href="#cb33-17" aria-hidden="true" tabindex="-1"></a>p_exc <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(final, <span class="fu">aes</span>(x, y)) <span class="sc">+</span></span>
+<span id="cb33-18"><a href="#cb33-18" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_area</span>(<span class="at">data =</span> <span class="fu">filter</span>(final, x <span class="sc">&gt;=</span> <span class="dv">1</span>), <span class="at">fill =</span> <span class="st">&quot;#d7191c&quot;</span>, <span class="at">alpha =</span> <span class="fl">0.5</span>) <span class="sc">+</span></span>
+<span id="cb33-19"><a href="#cb33-19" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>(<span class="at">colour =</span> <span class="st">&quot;darkgreen&quot;</span>, <span class="at">linewidth =</span> <span class="fl">1.2</span>) <span class="sc">+</span></span>
+<span id="cb33-20"><a href="#cb33-20" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_vline</span>(<span class="at">xintercept =</span> <span class="dv">1</span>, <span class="at">linetype =</span> <span class="dv">2</span>) <span class="sc">+</span></span>
+<span id="cb33-21"><a href="#cb33-21" aria-hidden="true" tabindex="-1"></a>  <span class="fu">annotate</span>(<span class="st">&quot;text&quot;</span>, <span class="at">x =</span> <span class="fl">1.35</span>, <span class="at">y =</span> <span class="fu">max</span>(final<span class="sc">$</span>y) <span class="sc">*</span> <span class="fl">0.6</span>, <span class="at">size =</span> <span class="fl">3.5</span>,</span>
+<span id="cb33-22"><a href="#cb33-22" aria-hidden="true" tabindex="-1"></a>           <span class="at">label =</span> <span class="fu">paste0</span>(<span class="st">&quot;P(risk &gt; 1) = &quot;</span>, <span class="fu">sprintf</span>(<span class="st">&quot;%.2f&quot;</span>, P1))) <span class="sc">+</span></span>
+<span id="cb33-23"><a href="#cb33-23" aria-hidden="true" tabindex="-1"></a>  <span class="fu">coord_cartesian</span>(<span class="at">xlim =</span> <span class="fu">c</span>(<span class="fl">0.5</span>, <span class="fl">1.8</span>)) <span class="sc">+</span></span>
+<span id="cb33-24"><a href="#cb33-24" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">&quot;Exceedance probability&quot;</span>, <span class="at">x =</span> <span class="st">&quot;Relative risk, Potter&quot;</span>, <span class="at">y =</span> <span class="cn">NULL</span>) <span class="sc">+</span></span>
+<span id="cb33-25"><a href="#cb33-25" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_classic</span>(<span class="at">base_size =</span> <span class="dv">12</span>)</span>
+<span id="cb33-26"><a href="#cb33-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-27"><a href="#cb33-27" aria-hidden="true" tabindex="-1"></a>p_ci <span class="sc">+</span> p_exc</span></code></pre></div>
+</details>
+<div class="cell-output-display">
+<div id="fig-read-curve" class="quarto-float quarto-figure quarto-figure-center">
+<figure class="quarto-float quarto-float-fig">
+<div aria-describedby="fig-read-curve-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="BSTA374_Lecture_BayesINLA_files/figure-html/fig-read-curve-1.png" class="img-fluid" width="864" />
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-read-curve-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 7: Potter’s final posterior curve. Left: the 95% credible interval leaves 2.5% of the area in each grey tail. Right: the exceedance probability is the red area to the right of 1.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>In R, the same numbers come straight from the curve:</p>
+<div class="cell">
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb34"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>marg <span class="ot">&lt;-</span> m2<span class="sc">$</span>marginals.fitted.values[[k]]          <span class="co"># Potter&#39;s posterior curve</span></span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a><span class="fu">inla.qmarginal</span>(<span class="fu">c</span>(<span class="fl">0.025</span>, <span class="fl">0.975</span>), marg)            <span class="co"># 95% credible interval</span></span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 0.8333901 1.1602932</code></pre>
+</div>
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb36"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="dv">1</span> <span class="sc">-</span> <span class="fu">inla.pmarginal</span>(<span class="dv">1</span>, marg)                      <span class="co"># P(risk &gt; 1)</span></span></code></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 0.3835876</code></pre>
+</div>
+</div>
+</section>
+<section id="three-maps" class="level2">
+<h2>Three maps</h2>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb38"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a>pa <span class="sc">|&gt;</span></span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">select</span>(county) <span class="sc">|&gt;</span></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">left_join</span>(<span class="fu">select</span>(dat, county, SIR, RR_eb, RR_bym2), <span class="at">by =</span> <span class="st">&quot;county&quot;</span>) <span class="sc">|&gt;</span></span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">pivot_longer</span>(<span class="fu">c</span>(SIR, RR_eb, RR_bym2), <span class="at">names_to =</span> <span class="st">&quot;estimate&quot;</span>, <span class="at">values_to =</span> <span class="st">&quot;risk&quot;</span>) <span class="sc">|&gt;</span></span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">estimate =</span> <span class="fu">factor</span>(estimate, <span class="fu">c</span>(<span class="st">&quot;SIR&quot;</span>, <span class="st">&quot;RR_eb&quot;</span>, <span class="st">&quot;RR_bym2&quot;</span>),</span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a>                           <span class="fu">c</span>(<span class="st">&quot;SIR (raw)&quot;</span>, <span class="st">&quot;Empirical Bayes&quot;</span>, <span class="st">&quot;BYM2 (INLA)&quot;</span>))) <span class="sc">|&gt;</span></span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ggplot</span>() <span class="sc">+</span></span>
+<span id="cb38-8"><a href="#cb38-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_sf</span>(<span class="fu">aes</span>(<span class="at">fill =</span> <span class="fu">cut</span>(risk, sir_breaks)), <span class="at">colour =</span> <span class="st">&quot;white&quot;</span>, <span class="at">linewidth =</span> <span class="fl">0.15</span>) <span class="sc">+</span></span>
+<span id="cb38-9"><a href="#cb38-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">facet_wrap</span>(<span class="sc">~</span> estimate) <span class="sc">+</span></span>
+<span id="cb38-10"><a href="#cb38-10" aria-hidden="true" tabindex="-1"></a>  sir_fill <span class="sc">+</span></span>
+<span id="cb38-11"><a href="#cb38-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_void</span>(<span class="at">base_size =</span> <span class="dv">12</span>) <span class="sc">+</span></span>
+<span id="cb38-12"><a href="#cb38-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme</span>(<span class="at">legend.position =</span> <span class="st">&quot;bottom&quot;</span>)</span></code></pre></div>
+</details>
+<div class="cell-output-display">
+<div id="fig-maps" class="quarto-float quarto-figure quarto-figure-center">
+<figure class="quarto-float quarto-float-fig">
+<div aria-describedby="fig-maps-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="BSTA374_Lecture_BayesINLA_files/figure-html/fig-maps-1.png" class="img-fluid" width="864" />
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-maps-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 8: Raw SIR, empirical Bayes and BYM2. Same colours.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>The extreme colours of the raw map, mostly small rural counties, fade. What remains is the broad pattern.</p>
+</section>
+<section id="how-sure-are-we-the-exceedance-map" class="level2">
+<h2>How sure are we? The exceedance map</h2>
+<p>For the well we asked: how likely is it that the water is unsafe more than half the time? For each county we ask: how likely is it that its risk is above the state average, <span class="math inline">\(P(\theta &gt; 1)\)</span>? This is the <strong>exceedance probability</strong>. It is the red area of the figure above, computed for every county.</p>
+<div class="cell">
+<details open class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb39"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a>dat<span class="sc">$</span>p_exc <span class="ot">&lt;-</span> <span class="fu">sapply</span>(m2<span class="sc">$</span>marginals.fitted.values,</span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">function</span>(m) <span class="dv">1</span> <span class="sc">-</span> <span class="fu">inla.pmarginal</span>(<span class="dv">1</span>, m))   <span class="co"># P(θ &gt; 1)</span></span></code></pre></div>
+</details>
+</div>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode" id="cb40"><pre class="sourceCode r cell-code"><code class="sourceCode r"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a>exc_cols <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">&quot;Probably lower (&lt; 0.2)&quot;</span>  <span class="ot">=</span> <span class="st">&quot;#2c7bb6&quot;</span>,</span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>              <span class="st">&quot;Uncertain (0.2–0.8)&quot;</span>     <span class="ot">=</span> <span class="st">&quot;grey90&quot;</span>,</span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>              <span class="st">&quot;Probably higher (&gt; 0.8)&quot;</span> <span class="ot">=</span> <span class="st">&quot;#d7191c&quot;</span>)</span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>pa <span class="sc">|&gt;</span></span>
+<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">select</span>(county) <span class="sc">|&gt;</span></span>
+<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">left_join</span>(<span class="fu">select</span>(dat, county, p_exc), <span class="at">by =</span> <span class="st">&quot;county&quot;</span>) <span class="sc">|&gt;</span></span>
+<span id="cb40-8"><a href="#cb40-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">exc =</span> <span class="fu">cut</span>(p_exc, <span class="fu">c</span>(<span class="dv">0</span>, <span class="fl">0.2</span>, <span class="fl">0.8</span>, <span class="dv">1</span>), <span class="at">labels =</span> <span class="fu">names</span>(exc_cols),</span>
+<span id="cb40-9"><a href="#cb40-9" aria-hidden="true" tabindex="-1"></a>                   <span class="at">include.lowest =</span> <span class="cn">TRUE</span>)) <span class="sc">|&gt;</span></span>
+<span id="cb40-10"><a href="#cb40-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ggplot</span>() <span class="sc">+</span></span>
+<span id="cb40-11"><a href="#cb40-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_sf</span>(<span class="fu">aes</span>(<span class="at">fill =</span> exc), <span class="at">colour =</span> <span class="st">&quot;white&quot;</span>, <span class="at">linewidth =</span> <span class="fl">0.2</span>) <span class="sc">+</span></span>
+<span id="cb40-12"><a href="#cb40-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">scale_fill_manual</span>(<span class="at">values =</span> exc_cols, <span class="at">drop =</span> <span class="cn">FALSE</span>, <span class="at">name =</span> <span class="cn">NULL</span>) <span class="sc">+</span></span>
+<span id="cb40-13"><a href="#cb40-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_void</span>(<span class="at">base_size =</span> <span class="dv">12</span>)</span></code></pre></div>
+</details>
+<div class="cell-output-display">
+<div id="fig-exceed" class="quarto-float quarto-figure quarto-figure-center">
+<figure class="quarto-float quarto-float-fig">
+<div aria-describedby="fig-exceed-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="BSTA374_Lecture_BayesINLA_files/figure-html/fig-exceed-1.png" class="img-fluid" width="672" />
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-exceed-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure 9: Probability that each county’s lung cancer risk exceeds the state average (BYM2).
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>Counties probably above average: Allegheny, Bucks, Butler, Delaware, Philadelphia, Venango. Potter, despite its SIR of 1.37, is not among them (<span class="math inline">\(P = 0.38\)</span>): 22 cases are not enough.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class='callout-icon'></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Tip</span>Key idea
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>INLA does the same shrinkage, borrows from the neighbours, and tells us how sure we are about each county.</p>
+</div>
+</div>
+</section>
+</section>
+<section id="in-class-exercise" class="level1 unnumbered">
+<h1 class="unnumbered">In-class exercise</h1>
+<p>Work in pairs, 15 minutes.</p>
+<ol type="1">
+<li><strong>Restaurants.</strong> Suppose 100 people, not 10, had tried restaurants in the area. Run <code>best_guess(2, 5.0, borrowed = 100)</code> and <code>best_guess(800, 4.7, borrowed = 100)</code>. What happens to A and to B? Why?</li>
+<li><strong>Well water.</strong> Suppose the family knew nothing about nearby wells and started from a flat prior, <code>a &lt;- 1; b &lt;- 1</code>. Rerun the updating. How does the final best guess change, and why?</li>
+<li><strong>Funnel.</strong> Cameron County has an SIR of 1.35 with only 6 expected cases. Is it inside the funnel? What is its empirical Bayes estimate, <code>pa$RR_eb[pa$county == "cameron"]</code>? Explain the difference.</li>
+<li><strong>Interpretation.</strong> In two sentences for a county health officer, explain why Potter is not flagged even though its SIR is 1.37.</li>
+</ol>
+</section>
+<section id="key-takeaways" class="level1 unnumbered">
+<h1 class="unnumbered">Key takeaways</h1>
+<ol type="1">
+<li>The posterior is a compromise between the prior and the data; the more data, the more the data win.</li>
+<li>A raw SIR mixes real differences and chance; chance is largest in small counties.</li>
+<li>Shrinkage: small counties borrow from the state (or their neighbours), big counties keep their SIR.</li>
+<li>Report how sure we are, not only the estimate: exceedance probabilities.</li>
+</ol>
+</section>
+<section id="words-to-know" class="level1 unnumbered">
+<h1 class="unnumbered">Words to know</h1>
+<table class="caption-top">
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Word</th>
+<th>Plain meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Prior</td>
+<td>what we believe before seeing the data</td>
+</tr>
+<tr class="even">
+<td>Likelihood</td>
+<td>what the data say</td>
+</tr>
+<tr class="odd">
+<td>Posterior</td>
+<td>what we believe after seeing the data</td>
+</tr>
+<tr class="even">
+<td>Credible interval</td>
+<td>a range that contains the true value with 95% probability</td>
+</tr>
+<tr class="odd">
+<td>Shrinkage</td>
+<td>pulling unreliable estimates toward an average</td>
+</tr>
+<tr class="even">
+<td>Empirical Bayes</td>
+<td>shrinkage where the data decide how much to shrink</td>
+</tr>
+<tr class="odd">
+<td>Exceedance probability</td>
+<td>the probability that a risk is above a threshold, e.g. the state average</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="references" class="level1 unnumbered">
+<h1 class="unnumbered">References</h1>
+<p>Clayton, D., &amp; Kaldor, J. (1987). Empirical Bayes estimates of age-standardized relative risks for use in disease mapping. <em>Biometrics</em>, 43(3), 671–681.</p>
+<p>Marshall, R. J. (1991). Mapping disease and mortality rates using empirical Bayes estimators. <em>Journal of the Royal Statistical Society: Series C (Applied Statistics)</em>, 40(2), 283–294.</p>
+<p>Moraga, P. (2019). <em>Geospatial health data: Modeling and visualization with R-INLA and Shiny</em>. Chapman &amp; Hall/CRC, Ch. 3–5.</p>
+<p>Riebler, A., Sørbye, S. H., Simpson, D., &amp; Rue, H. (2016). An intuitive Bayesian spatial model for disease mapping that accounts for scaling. <em>Statistical Methods in Medical Research</em>, 25(4), 1145–1165.</p>
+<div id="quarto-navigation-envelope" class="hidden">
+<p><span class="hidden quarto-markdown-envelope-contents" data-render-id="cXVhcnRvLWludC1zaWRlYmFyLXRpdGxl">Population Health</span> <span class="hidden quarto-markdown-envelope-contents" data-render-id="cXVhcnRvLWludC1uYXZiYXItdGl0bGU=">Population Health</span></p>
+</div>
+<div id="quarto-meta-markdown" class="hidden">
+<p><span class="hidden quarto-markdown-envelope-contents" data-render-id="cXVhcnRvLW1ldGF0aXRsZQ==">Bayesian Disease Mapping with R-INLA – Population Health</span> <span class="hidden quarto-markdown-envelope-contents" data-render-id="cXVhcnRvLXR3aXR0ZXJjYXJkdGl0bGU=">Bayesian Disease Mapping with R-INLA – Population Health</span> <span class="hidden quarto-markdown-envelope-contents" data-render-id="cXVhcnRvLW9nY2FyZHRpdGxl">Bayesian Disease Mapping with R-INLA – Population Health</span> <span class="hidden quarto-markdown-envelope-contents" data-render-id="cXVhcnRvLW1ldGFzaXRlbmFtZQ==">Population Health</span> <span class="hidden quarto-markdown-envelope-contents" data-render-id="cXVhcnRvLXR3aXR0ZXJjYXJkZGVzYw==">How much should we trust a number?</span> <span class="hidden quarto-markdown-envelope-contents" data-render-id="cXVhcnRvLW9nY2FyZGRkZXNj">How much should we trust a number?</span></p>
+</div>
+</section>
+
+</main> <!-- /main -->
+<script id = "quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+</body>
+
+</html>

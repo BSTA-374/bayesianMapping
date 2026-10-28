@@ -1,0 +1,638 @@
+---
+title: "Bayesian Disease Mapping with R-INLA"
+subtitle: "How much should we trust a number?"
+author: "Eric M. Delmelle · Lehigh University"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 2
+    toc-location: left
+    toc-title: "On this page"
+    number-sections: false
+    code-fold: show
+    code-copy: true
+    highlight-style: github
+    fig-align: center
+    embed-resources: true
+  pdf:
+    papersize: letter
+    geometry:
+      - margin=1in
+    toc: false
+    colorlinks: true
+    code-overflow: wrap
+execute:
+  warning: false
+  message: false
+  eval: true
+  echo: true
+---
+
+## Today {.unnumbered}
+
+Some numbers rest on a lot of data, some on very little. Today we learn the
+Bayesian way of taking that into account, first with restaurants and a well,
+then with lung cancer in Pennsylvania. Reading: **Moraga Ch. 3, 4 and
+§5.1--5.3**.
+
+::: {.callout-note}
+## By the end of today you can
+
+1. explain *prior*, *data* and *posterior* with an everyday example;
+2. explain why the SIR of a small county is unreliable;
+3. say what *shrinkage* does, and to which counties;
+4. read a smoothed map and an exceedance map made with R-INLA.
+:::
+
+```{r}
+#| label: setup
+#| code-fold: false
+
+library(sf)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(spdep)
+library(SpatialEpi)   # pennLC
+library(INLA)
+```
+
+::: {.callout-warning}
+**Install INLA before class.** It is not on CRAN:
+
+```r
+install.packages("INLA",
+  repos = c(getOption("repos"), INLA = "https://inla.r-inla-download.org/R/stable"))
+```
+:::
+
+# The Bayesian idea in one example
+
+## Two restaurants
+
+| | Number of reviews | Average rating |
+|---|---|---|
+| Restaurant A | 2 | 5.0 ★ |
+| Restaurant B | 800 | 4.7 ★ |
+
+Which one would you pick? Most people pick B, even though A has the higher
+average: two five-star reviews could come from the owner's friends. Without
+noticing, you did three things.
+
+1. You started from what you know about restaurants in general: a typical one
+   gets about 4.0 stars. That is the **prior**.
+2. You looked at each restaurant's own reviews. That is the **data**.
+3. You combined the two, trusting the reviews more when there are many. That is
+   the **posterior**, your best guess.
+
+## The best guess is an average
+
+Where does the prior come from? Recently, **10 people** tried restaurants in
+the area, and their average rating was **4.0 stars**. We **borrow** these 10
+ratings and add them to each restaurant's own reviews; the best guess is the
+average of all the ratings, borrowed and own. With $n$ own reviews,
+
+$$
+\text{best guess} \;=\; \frac{\text{total stars}}{\text{total ratings}}
+\;=\; \frac{10 \times 4.0 \;+\; n \times \text{its average}}{10 + n}.
+$$
+
+Two or three own reviews cannot overturn the 10 borrowed ratings; a few dozen
+can. The same best guess is a weighted average,
+
+$$
+\text{best guess} \;=\; w \times \text{its average} \;+\; (1 - w) \times 4.0,
+\qquad w = \frac{n}{n + 10},
+$$
+
+where $w$ is the **share of its own reviews**: how much we **trust its own
+reviews**, between 0 and 1. In R:
+
+```{r}
+#| label: restaurants
+
+best_guess <- function(reviews, average, prior_mean = 4.0, borrowed = 10) {
+  w <- reviews / (reviews + borrowed)           # share of its own reviews
+  w * average + (1 - w) * prior_mean            # weighted average
+}
+
+best_guess(reviews = 2,   average = 5.0)        # Restaurant A
+best_guess(reviews = 800, average = 4.7)        # Restaurant B
+```
+
+Restaurant A's 5.0 is pulled back to `r round(best_guess(2, 5.0), 2)`: two
+reviews are not enough to convince us. B barely moves, to
+`r round(best_guess(800, 4.7), 2)`. Pulling an estimate toward the average is
+called **shrinkage**.
+
+## More reviews, less shrinkage
+
+What if A kept getting five-star reviews?
+
+```{r}
+#| label: restaurants-more
+
+tibble(reviews = c(1, 2, 5, 10, 50, 100, 800)) |>
+  mutate(w          = round(reviews / (reviews + 10), 2),   # share of its own reviews
+         best_guess = round(best_guess(reviews, 5.0), 2))
+```
+
+```{r}
+#| label: fig-restaurants
+#| code-fold: true
+#| fig-height: 3.8
+#| fig-cap: "Best guess for a restaurant whose reviews all give 5.0 stars, as reviews accumulate."
+
+tibble(reviews = 1:1000) |>
+  mutate(guess = best_guess(reviews, 5.0)) |>
+  ggplot(aes(reviews, guess)) +
+  geom_hline(yintercept = c(4, 5), linetype = 2, colour = "grey50") +
+  annotate("text", x = 1, y = c(3.95, 5.05), hjust = 0, size = 3.5,
+           label = c("prior: a typical restaurant (4.0)", "its own reviews (5.0)")) +
+  geom_line(linewidth = 1.2, colour = "darkgreen") +
+  geom_point(data = tibble(reviews = 2, guess = best_guess(2, 5.0)), size = 3) +
+  annotate("text", x = 2.4, y = best_guess(2, 5.0), label = "Restaurant A",
+           hjust = 0, vjust = 1.6, size = 3.5) +
+  scale_x_log10() +
+  labs(x = "Number of reviews (log scale)", y = "Best guess (stars)") +
+  theme_classic(base_size = 12)
+```
+
+With 2 reviews, the guess stays close to the prior. With 10 own reviews, as
+many as the borrowed ones, it sits exactly halfway. With hundreds, the prior hardly
+matters.
+
+::: {.callout-tip}
+## Key idea
+The posterior is a compromise between the prior and the data. The more data,
+the more the data win.
+:::
+
+# Learning one test at a time: is the well water safe?
+
+## The story
+
+A family tests its well for arsenic ten times. The EPA limit is 10 µg/L. Their
+question: **how often is this water above the limit?** Call that share
+$\theta$: $\theta = 0.2$ means unsafe one test in five.
+
+```{r}
+#| label: data-arsenic
+
+epa   <- 10                                          # EPA limit, µg/L
+conc  <- c(14, 7, 12, 18, 11, 15, 9, 13, 14, 14)     # 10 tests (illustrative)
+above <- as.integer(conc > epa)                      # 1 = above, 0 = below
+above
+```
+
+We do not start from nothing. In nearby wells, about **half** of past tests
+were above the limit: 5 of 10. That is our **prior**, centred on
+$\theta = 0.5$. A Beta curve keeps the score: Beta(5, 5) means 10 tests
+borrowed from the neighbours, 5 above and 5 below. Each new test above the limit adds 1
+to the first number, each test below adds 1 to the second.
+
+## Watching the posterior learn
+
+In each panel, red dotted is what we believed **before** the test, green is
+what we believe **after**.
+
+```{r}
+#| label: fn-update
+#| code-fold: true
+
+plot_update <- function(a, b, x, n, title = "") {
+  theta <- seq(0, 1, 0.001)
+  plot(theta, dbeta(theta, a, b), type = "l", lty = 3, lwd = 3, col = "red",
+       ylim = c(0, 4), bty = "l", xlab = expression(theta), ylab = "",
+       main = title)                                            # before
+  if (n > 0)                                                    # no test, no update
+    lines(theta, dbeta(theta, a + x, b + n - x), lwd = 3, col = "darkgreen")  # after
+}
+```
+
+```{r}
+#| label: fig-seq-chain
+#| fig-width: 9
+#| fig-height: 6.5
+#| fig-cap: "Each panel starts from the previous panel's green curve and adds one test."
+
+par(mfrow = c(3, 4), mar = c(4, 2, 2, 1))
+
+a <- 5; b <- 5                                      # prior: 5 of 10 above in nearby wells
+plot_update(a, b, 0, 0, title = "Before testing: nearby wells")
+
+for (i in 1:10) {
+  plot_update(a, b, above[i], 1,
+              title = paste0("#", i, ": ", conc[i], " ug/L",
+                             ifelse(above[i] == 1, " (above)", " (below)")))
+  a <- a + above[i]                                 # after ...
+  b <- b + 1 - above[i]                             # ... becomes next before
+}
+```
+
+Three things to notice:
+
+1. A test above the limit pushes the curve right; a test below pushes it left
+   (tests 2 and 7).
+2. The curve gets **taller and narrower**: more tests, more certainty.
+3. Each panel's green curve becomes the next panel's red curve. That is
+   Bayesian learning.
+
+::: {.callout-note}
+**Why does the y-axis stop at 4?** It shows a density, not a probability, so
+it can exceed 1; the area under each curve is 1. We fix it at 4 so the panels
+can be compared.
+:::
+
+## What do we know after ten tests?
+
+```{r}
+#| label: read-post
+
+a / (a + b)                                      # best guess for θ
+qbeta(c(0.025, 0.975), a, b)                     # 95% credible interval
+1 - pbeta(0.5, a, b)                             # P(unsafe more than half the time)
+```
+
+Our best guess is that the water is above the limit about
+`r round(100 * a / (a + b))`% of the time, and with 95% probability between
+`r round(100 * qbeta(0.025, a, b))`% and `r round(100 * qbeta(0.975, a, b))`%
+(the **credible interval**). The probability that it is unsafe more than half
+the time is `r sprintf("%.2f", 1 - pbeta(0.5, a, b))`. Bayesian results answer
+the family's question directly, as a probability.
+
+Where does `r round(100 * a / (a + b))`% come from? The well's own tests say
+`r sum(above)` of 10, `r round(100 * mean(above))`%. The nearby wells say 50%.
+The 10 borrowed tests and the well's own 10 count equally, so the answer sits
+halfway. It is the restaurant formula again:
+
+$$
+`r sprintf("%.2f", a / (a + b))` \;=\; w \times `r sprintf("%.2f", mean(above))`
+\;+\; (1 - w) \times 0.50,
+\qquad w = \frac{10}{10 + 10} = 0.5.
+$$
+
+::: {.callout-tip}
+## Key idea
+We start from what we already know, here the nearby wells, and each new test
+updates it. More data, a narrower curve, more certainty.
+:::
+
+# Counties: why small counties need help
+
+## The data
+
+We rebuild the Pennsylvania lung cancer counts from the SIR lecture: $O$
+observed cases, $E$ expected cases, and SIR $= O/E$.
+
+```{r}
+#| label: recap
+#| code-fold: true
+
+data(pennLC)
+d <- pennLC$data
+
+ref <- d |>
+  group_by(race, gender, age) |>
+  summarise(r = sum(cases) / sum(population), .groups = "drop")   # reference rates
+
+county <- d |>
+  left_join(ref, by = c("race", "gender", "age")) |>
+  group_by(county) |>
+  summarise(O = sum(cases), E = sum(population * r), .groups = "drop") |>
+  mutate(county = as.character(county), SIR = O / E)
+
+pa <- st_as_sf(pennLC$spatial.polygon) |>
+  st_set_crs(4326) |>
+  mutate(county = names(pennLC$spatial.polygon)) |>
+  st_transform(5070) |>                                           # Albers
+  left_join(county, by = "county")
+
+sir_breaks <- c(0, 0.67, 0.83, 0.95, 1.05, 1.2, 1.5, Inf)
+sir_fill   <- scale_fill_brewer(palette = "RdBu", direction = -1, drop = FALSE, name = "Risk")
+```
+
+## The SIR map
+
+```{r}
+#| label: fig-sir
+#| code-fold: true
+#| fig-height: 3.8
+#| fig-cap: "Lung cancer SIRs, Pennsylvania counties."
+
+ggplot(pa) +
+  geom_sf(aes(fill = cut(SIR, sir_breaks)), colour = "white", linewidth = 0.2) +
+  sir_fill +
+  theme_void(base_size = 12)
+```
+
+Which counties have the most extreme SIRs?
+
+```{r}
+#| label: sir-extremes
+
+extremes <- county |>
+  arrange(SIR) |>
+  slice(c(1:3, 65:67)) |>                           # 3 lowest, 3 highest
+  mutate(E = round(E, 1), SIR = round(SIR, 2))
+extremes
+```
+
+Of these six counties, `r sum(extremes$E < 20)` expect fewer than 20 cases;
+the median county expects `r round(median(county$E))`. A few cases more or less
+move their SIR a lot. Small counties are like restaurants with two reviews.
+
+## The funnel plot
+
+How far can an SIR stray by chance alone? If a county's true risk were exactly
+the state's, its SIR would still fall, about 95% of the time, within
+$1 \pm 1.96/\sqrt{E}$. Plotted against $E$, that range is a funnel.
+
+```{r}
+#| label: fig-funnel
+#| code-fold: true
+#| fig-height: 4.5
+#| fig-cap: "SIRs against expected cases. Grey: where about 95% of SIRs fall by chance alone."
+
+funnel <- tibble(E = exp(seq(log(4), log(1500), length.out = 200))) |>
+  mutate(lo = 1 - 1.96 / sqrt(E),                   # chance range of the SIR
+         hi = 1 + 1.96 / sqrt(E))
+
+labelled <- filter(county, county %in% c("sullivan", "potter", "juniata", "philadelphia"))
+
+ggplot() +
+  geom_ribbon(data = funnel, aes(E, ymin = lo, ymax = hi), fill = "grey85") +
+  geom_hline(yintercept = 1, colour = "grey50") +
+  geom_point(data = county, aes(E, SIR)) +
+  geom_text(data = labelled, aes(E, SIR, label = tools::toTitleCase(county)),
+            nudge_y = 0.07, size = 3.5) +
+  scale_x_log10() +
+  labs(x = "Expected cases (log scale)", y = "SIR") +
+  theme_classic(base_size = 12)
+```
+
+The funnel is wide on the left. Potter's 1.37 and Sullivan's 0.40 sit inside
+it: they could be chance. Philadelphia's 1.16 is far outside: with more than
+1,200 expected cases, a 16% excess is not chance.
+
+::: {.callout-important}
+## The problem in one sentence
+A raw SIR mixes real differences in risk with chance, and chance is largest in
+small counties.
+:::
+
+# Shrinkage: the restaurant formula for counties
+
+## Same formula, new names
+
+| Restaurants | Counties |
+|---|---|
+| number of reviews | expected cases $E$ |
+| its average rating | its SIR |
+| a typical restaurant, 4.0 | the state average, 1 |
+| 10 borrowed ratings, average 4.0 | $k$ borrowed expected cases at the state rate |
+| trust in its own reviews, $w$ | trust in its own SIR, $w$ |
+
+So each county gets
+
+$$
+\text{estimate} \;=\; w \times \text{SIR} \;+\; (1 - w) \times 1,
+\qquad w = \frac{E}{E + k}.
+$$
+
+A big county (large $E$) keeps its SIR. A small county borrows from the state.
+
+## Who decides $k$? The data
+
+For the restaurants we picked 10 ourselves. For counties, R estimates $k$ from
+the 67 SIRs:
+
+- if counties differ **much more** than chance alone would produce, real
+  differences are large, we trust each county's SIR, and $k$ is small;
+- if counties differ **about as much** as chance would produce, we trust the
+  state average more, and $k$ is large.
+
+Letting the data choose the prior this way is called **empirical Bayes**
+(Clayton and Kaldor 1987; Marshall 1991). `EBest()` in **spdep** does it in
+one line.
+
+```{r}
+#| label: eb-global
+
+eb <- EBest(pa$O, pa$E)                              # cases, expected cases
+pa$RR_eb <- eb$estmm                                 # shrunk estimate
+
+k <- with(attr(eb, "parameters"), b / a)             # k borrowed expected cases
+k
+pa$w <- pa$E / (pa$E + k)                            # trust in own SIR
+```
+
+Each county borrows about `r round(k)` expected cases at the state rate. Here are five
+counties, from small to large:
+
+```{r}
+#| label: eb-table
+
+pa |>
+  st_drop_geometry() |>
+  filter(county %in% c("sullivan", "potter", "venango", "lehigh", "philadelphia")) |>
+  arrange(E) |>
+  transmute(county, E = round(E), SIR = round(SIR, 2),
+            w = round(w, 2), estimate = round(RR_eb, 2))
+```
+
+Sullivan's own 7 expected cases are mixed with `r round(k)` borrowed ones: we
+trust its SIR
+only `r round(100 * pa$w[pa$county == "sullivan"])`%, and its estimate is
+almost the state's. Philadelphia, with more than 1,200 expected cases, keeps
+`r round(100 * pa$w[pa$county == "philadelphia"])`% of its SIR. Potter and
+Venango have the same SIR, 1.37, like two restaurants with the same average,
+but Venango rests on three times more cases, so it stays higher:
+`r sprintf("%.2f", pa$RR_eb[pa$county == "venango"])` against
+`r sprintf("%.2f", pa$RR_eb[pa$county == "potter"])`.
+
+## Where do we borrow?
+
+```{r}
+#| label: fig-weights
+#| code-fold: true
+#| fig-height: 3.8
+#| fig-cap: "Trust in each county's own SIR. Dark: we keep the county's SIR. Light: we borrow from the state."
+
+ggplot(pa) +
+  geom_sf(aes(fill = w), colour = "white", linewidth = 0.2) +
+  scale_fill_distiller(palette = "Purples", direction = 1, limits = c(0, 1),
+                       name = "Trust w") +
+  theme_void(base_size = 12)
+```
+
+The map of $w$ is a map of population: the rural north and centre borrow the
+most, the Philadelphia and Pittsburgh areas the least.
+
+::: {.callout-tip}
+## Key idea
+Small counties borrow from the state; big counties keep their own SIR. The
+data decide how much to borrow.
+:::
+
+# Full Bayes with R-INLA
+
+Empirical Bayes gives one number per county. A **full Bayesian** model does the
+same shrinkage but returns a whole posterior curve per county, like the green
+curves of the well. That tells us **how sure** we are. INLA is a fast way to
+fit such models (Moraga Ch. 3--4).
+
+We use the **BYM2** model (Moraga §5.3). Instead of borrowing from the whole
+state, each county borrows mostly from its **neighbours**, the way the family
+borrowed from nearby wells. We use the queen neighbours from the Moran's I
+lecture.
+
+```{r}
+#| label: m2
+
+dat <- st_drop_geometry(pa) |>
+  mutate(id = row_number())                          # one index per county
+
+nb <- poly2nb(pa, queen = TRUE)                      # queen neighbours
+nb2INLA("pa.adj", nb)                                # write for INLA
+g  <- inla.read.graph("pa.adj")
+
+m2 <- inla(O ~ 1 + f(id, model = "bym2", graph = g),
+           family = "poisson", E = E, data = dat,
+           control.predictor = list(compute = TRUE),
+           control.compute = list(return.marginals.predictor = TRUE))
+
+dat$RR_bym2 <- m2$summary.fitted.values$mean         # posterior mean risk
+```
+
+Read the formula as: log-risk = an overall level + a bump for each county that
+borrows from its neighbours (Moraga §4.1).
+
+## Three maps
+
+```{r}
+#| label: fig-maps
+#| code-fold: true
+#| fig-width: 9
+#| fig-height: 3.6
+#| fig-cap: "Raw SIR, empirical Bayes and BYM2. Same colours."
+
+pa |>
+  select(county) |>
+  left_join(select(dat, county, SIR, RR_eb, RR_bym2), by = "county") |>
+  pivot_longer(c(SIR, RR_eb, RR_bym2), names_to = "estimate", values_to = "risk") |>
+  mutate(estimate = factor(estimate, c("SIR", "RR_eb", "RR_bym2"),
+                           c("SIR (raw)", "Empirical Bayes", "BYM2 (INLA)"))) |>
+  ggplot() +
+  geom_sf(aes(fill = cut(risk, sir_breaks)), colour = "white", linewidth = 0.15) +
+  facet_wrap(~ estimate) +
+  sir_fill +
+  theme_void(base_size = 12) +
+  theme(legend.position = "bottom")
+```
+
+The extreme colours of the raw map, mostly small rural counties, fade. What
+remains is the broad pattern.
+
+## How sure are we? The exceedance map
+
+For the well we asked: how likely is it that the water is unsafe more than half
+the time? For each county we ask: how likely is it that its risk is above the
+state average, $P(\theta > 1)$? This is the **exceedance probability**.
+
+```{r}
+#| label: exceed
+
+dat$p_exc <- sapply(m2$marginals.fitted.values,
+                    function(m) 1 - inla.pmarginal(1, m))   # P(θ > 1)
+```
+
+```{r}
+#| label: fig-exceed
+#| code-fold: true
+#| fig-height: 3.8
+#| fig-cap: "Probability that each county's lung cancer risk exceeds the state average (BYM2)."
+
+exc_cols <- c("Probably lower (< 0.2)"  = "#2c7bb6",
+              "Uncertain (0.2–0.8)"     = "grey90",
+              "Probably higher (> 0.8)" = "#d7191c")
+
+pa |>
+  select(county) |>
+  left_join(select(dat, county, p_exc), by = "county") |>
+  mutate(exc = cut(p_exc, c(0, 0.2, 0.8, 1), labels = names(exc_cols),
+                   include.lowest = TRUE)) |>
+  ggplot() +
+  geom_sf(aes(fill = exc), colour = "white", linewidth = 0.2) +
+  scale_fill_manual(values = exc_cols, drop = FALSE, name = NULL) +
+  theme_void(base_size = 12)
+```
+
+Counties probably above average:
+`r paste(tools::toTitleCase(dat$county[dat$p_exc > 0.8]), collapse = ", ")`.
+Potter, despite its SIR of 1.37, is not among them
+($P = `r sprintf("%.2f", dat$p_exc[dat$county == "potter"])`$): 22 cases are
+not enough.
+
+::: {.callout-tip}
+## Key idea
+INLA does the same shrinkage, borrows from the neighbours, and tells us how
+sure we are about each county.
+:::
+
+# In-class exercise {.unnumbered}
+
+Work in pairs, 15 minutes.
+
+1. **Restaurants.** Suppose 100 people, not 10, had tried restaurants in the
+   area. Run `best_guess(2, 5.0, borrowed = 100)` and
+   `best_guess(800, 4.7, borrowed = 100)`. What happens to A and to B? Why?
+2. **Well water.** Suppose the family knew nothing about nearby wells and
+   started from a flat prior, `a <- 1; b <- 1`. Rerun the updating. How does
+   the final best guess change, and why?
+3. **Funnel.** Cameron County has an SIR of
+   `r sprintf("%.2f", county$SIR[county$county == "cameron"])` with only
+   `r round(county$E[county$county == "cameron"])` expected cases. Is it inside
+   the funnel? What is its empirical Bayes estimate,
+   `pa$RR_eb[pa$county == "cameron"]`? Explain the difference.
+4. **Interpretation.** In two sentences for a county health officer, explain
+   why Potter is not flagged even though its SIR is 1.37.
+
+# Key takeaways {.unnumbered}
+
+1. The posterior is a compromise between the prior and the data; the more
+   data, the more the data win.
+2. A raw SIR mixes real differences and chance; chance is largest in small
+   counties.
+3. Shrinkage: small counties borrow from the state (or their neighbours), big
+   counties keep their SIR.
+4. Report how sure we are, not only the estimate: exceedance probabilities.
+
+# Words to know {.unnumbered}
+
+| Word | Plain meaning |
+|---|---|
+| Prior | what we believe before seeing the data |
+| Likelihood | what the data say |
+| Posterior | what we believe after seeing the data |
+| Credible interval | a range that contains the true value with 95% probability |
+| Shrinkage | pulling unreliable estimates toward an average |
+| Empirical Bayes | shrinkage where the data decide how much to shrink |
+| Exceedance probability | the probability that a risk is above a threshold, e.g. the state average |
+
+# References {.unnumbered}
+
+Clayton, D., & Kaldor, J. (1987). Empirical Bayes estimates of age-standardized
+relative risks for use in disease mapping. *Biometrics*, 43(3), 671--681.
+
+Marshall, R. J. (1991). Mapping disease and mortality rates using empirical
+Bayes estimators. *Journal of the Royal Statistical Society: Series C
+(Applied Statistics)*, 40(2), 283--294.
+
+Moraga, P. (2019). *Geospatial health data: Modeling and visualization with
+R-INLA and Shiny*. Chapman & Hall/CRC, Ch. 3--5.
+
+Riebler, A., Sørbye, S. H., Simpson, D., & Rue, H. (2016). An intuitive
+Bayesian spatial model for disease mapping that accounts for scaling.
+*Statistical Methods in Medical Research*, 25(4), 1145--1165.

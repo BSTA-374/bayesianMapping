@@ -53,6 +53,7 @@ library(sf)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
+library(patchwork)
 library(spdep)
 library(SpatialEpi)   # pennLC
 library(INLA)
@@ -86,23 +87,34 @@ noticing, you did three things.
 3. You combined the two, trusting the reviews more when there are many. That is
    the **posterior**, your best guess.
 
-## The best guess is a weighted average
+## The best guess is an average
 
-Say our prior is worth 10 reviews of 4.0 stars. The best guess for a
-restaurant is
+Where does the prior come from? Recently, **10 people** tried restaurants in
+the area, and their average rating was **4.0 stars**. We **borrow** these 10
+ratings and add them to each restaurant's own reviews; the best guess is the
+average of all the ratings, borrowed and own. With $n$ own reviews,
+
+$$
+\text{best guess} \;=\; \frac{\text{total stars}}{\text{total ratings}}
+\;=\; \frac{10 \times 4.0 \;+\; n \times \text{its average}}{10 + n}.
+$$
+
+Two or three own reviews cannot overturn the 10 borrowed ratings; a few dozen
+can. The same best guess is a weighted average,
 
 $$
 \text{best guess} \;=\; w \times \text{its average} \;+\; (1 - w) \times 4.0,
-\qquad w = \frac{\text{its reviews}}{\text{its reviews} + 10}.
+\qquad w = \frac{n}{n + 10},
 $$
 
-$w$ is how much we **trust its own reviews**, between 0 and 1. In R:
+where $w$ is the **share of its own reviews**: how much we **trust its own
+reviews**, between 0 and 1. In R:
 
 ```{r}
 #| label: restaurants
 
-best_guess <- function(reviews, average, prior_mean = 4.0, prior_worth = 10) {
-  w <- reviews / (reviews + prior_worth)        # trust in its own reviews
+best_guess <- function(reviews, average, prior_mean = 4.0, borrowed = 10) {
+  w <- reviews / (reviews + borrowed)           # share of its own reviews
   w * average + (1 - w) * prior_mean            # weighted average
 }
 
@@ -123,7 +135,7 @@ What if A kept getting five-star reviews?
 #| label: restaurants-more
 
 tibble(reviews = c(1, 2, 5, 10, 50, 100, 800)) |>
-  mutate(w          = round(reviews / (reviews + 10), 2),   # trust in its reviews
+  mutate(w          = round(reviews / (reviews + 10), 2),   # share of its own reviews
          best_guess = round(best_guess(reviews, 5.0), 2))
 ```
 
@@ -148,8 +160,8 @@ tibble(reviews = 1:1000) |>
   theme_classic(base_size = 12)
 ```
 
-With 2 reviews, the guess stays close to the prior. With 10 reviews, as many as
-the prior is worth, it sits exactly halfway. With hundreds, the prior hardly
+With 2 reviews, the guess stays close to the prior. With 10 own reviews, as
+many as the borrowed ones, it sits exactly halfway. With hundreds, the prior hardly
 matters.
 
 ::: {.callout-tip}
@@ -177,8 +189,8 @@ above
 
 We do not start from nothing. In nearby wells, about **half** of past tests
 were above the limit: 5 of 10. That is our **prior**, centred on
-$\theta = 0.5$. A Beta curve keeps the score: Beta(5, 5) means 5 tests above
-and 5 below, borrowed from the neighbours. Each new test above the limit adds 1
+$\theta = 0.5$. A Beta curve keeps the score: Beta(5, 5) means 10 tests
+borrowed from the neighbours, 5 above and 5 below. Each new test above the limit adds 1
 to the first number, each test below adds 1 to the second.
 
 ## Watching the posterior learn
@@ -253,7 +265,7 @@ the family's question directly, as a probability.
 
 Where does `r round(100 * a / (a + b))`% come from? The well's own tests say
 `r sum(above)` of 10, `r round(100 * mean(above))`%. The nearby wells say 50%.
-The prior is worth 10 tests and the well has 10 of its own, so the answer sits
+The 10 borrowed tests and the well's own 10 count equally, so the answer sits
 halfway. It is the restaurant formula again:
 
 $$
@@ -380,7 +392,7 @@ small counties.
 | number of reviews | expected cases $E$ |
 | its average rating | its SIR |
 | a typical restaurant, 4.0 | the state average, 1 |
-| prior worth 10 reviews | state average worth $k$ expected cases |
+| 10 borrowed ratings, average 4.0 | $k$ borrowed expected cases at the state rate |
 | trust in its own reviews, $w$ | trust in its own SIR, $w$ |
 
 So each county gets
@@ -398,9 +410,9 @@ For the restaurants we picked 10 ourselves. For counties, R estimates $k$ from
 the 67 SIRs:
 
 - if counties differ **much more** than chance alone would produce, real
-  differences are large, the state average is worth little, and $k$ is small;
-- if counties differ **about as much** as chance would produce, the state
-  average is worth a lot, and $k$ is large.
+  differences are large, we trust each county's SIR, and $k$ is small;
+- if counties differ **about as much** as chance would produce, we trust the
+  state average more, and $k$ is large.
 
 Letting the data choose the prior this way is called **empirical Bayes**
 (Clayton and Kaldor 1987; Marshall 1991). `EBest()` in **spdep** does it in
@@ -412,12 +424,12 @@ one line.
 eb <- EBest(pa$O, pa$E)                              # cases, expected cases
 pa$RR_eb <- eb$estmm                                 # shrunk estimate
 
-k <- with(attr(eb, "parameters"), b / a)             # state worth k expected cases
+k <- with(attr(eb, "parameters"), b / a)             # k borrowed expected cases
 k
 pa$w <- pa$E / (pa$E + k)                            # trust in own SIR
 ```
 
-The state average is worth about `r round(k)` expected cases. Here are five
+Each county borrows about `r round(k)` expected cases at the state rate. Here are five
 counties, from small to large:
 
 ```{r}
@@ -431,7 +443,8 @@ pa |>
             w = round(w, 2), estimate = round(RR_eb, 2))
 ```
 
-Sullivan expects 7 cases against the state's `r round(k)`: we trust its SIR
+Sullivan's own 7 expected cases are mixed with `r round(k)` borrowed ones: we
+trust its SIR
 only `r round(100 * pa$w[pa$county == "sullivan"])`%, and its estimate is
 almost the state's. Philadelphia, with more than 1,200 expected cases, keeps
 `r round(100 * pa$w[pa$county == "philadelphia"])`% of its SIR. Potter and
@@ -497,6 +510,119 @@ dat$RR_bym2 <- m2$summary.fitted.values$mean         # posterior mean risk
 Read the formula as: log-risk = an overall level + a bump for each county that
 borrows from its neighbours (Moraga §4.1).
 
+## How does INLA get a credible interval?
+
+For every county, INLA returns a whole **posterior curve** for its relative
+risk, like the green curves of the well. For the well, a simple formula gave
+the curve. Here it cannot, because each county borrows from its neighbours,
+and we do not know **how much** to borrow: that depends on how different the
+counties really are, which is itself unknown. INLA works in three steps
+(Moraga §3.2):
+
+1. **Try several amounts of borrowing.** For each plausible value of how much
+   the counties differ, it computes the county's curve with a fast bell-shaped
+   (Laplace) approximation.
+2. **Average the curves.** It weights each curve by how well that amount of
+   borrowing fits all 67 counties, and averages them. This is the
+   *integrated* in INLA.
+3. **Read the final curve.** The posterior mean is its balance point; the 95%
+   credible interval cuts 2.5% of the area off each side; the exceedance
+   probability is the area to the right of 1.
+
+Here are steps 1 and 2 for Potter. Each dashed curve fixes one amount of
+borrowing, from little to a lot; the thick grey curve is INLA's final curve.
+
+```{r}
+#| label: fig-inla-steps
+#| code-fold: true
+#| fig-height: 3.8
+#| fig-cap: "Potter County. Dashed: posterior curves for three fixed amounts of borrowing. Thick grey: INLA's final curve, which averages over all plausible amounts."
+
+k   <- which(dat$county == "potter")
+tau <- c(10, m2$summary.hyperpar["Precision for id", "0.5quant"], 1000)   # little, middle, a lot
+phi <- m2$summary.hyperpar["Phi for id", "0.5quant"]
+
+fixed_fit <- function(t) {                           # BYM2 with borrowing fixed
+  hyp <- list(prec = list(initial = log(t),   fixed = TRUE),
+              phi  = list(initial = qlogis(phi), fixed = TRUE))
+  m <- inla(O ~ 1 + f(id, model = "bym2", graph = g, hyper = hyp),
+            family = "poisson", E = E, data = dat,
+            control.predictor = list(compute = TRUE),
+            control.compute = list(return.marginals.predictor = TRUE))
+  inla.smarginal(m$marginals.fitted.values[[k]])     # Potter's curve
+}
+
+lab <- c("borrow little (counties very different)", "borrow a middle amount",
+         "borrow a lot (counties very similar)")
+steps <- bind_rows(lapply(1:3, function(j) data.frame(fixed_fit(tau[j]), curve = lab[j]))) |>
+  mutate(curve = factor(curve, lab))
+final <- data.frame(inla.smarginal(m2$marginals.fitted.values[[k]]))
+
+ggplot() +
+  geom_line(data = final, aes(x, y), linewidth = 2.5, alpha = 0.35) +     # final curve, underneath
+  geom_line(data = steps, aes(x, y, colour = curve), linetype = 2, linewidth = 0.9) +
+  geom_vline(xintercept = dat$SIR[k], linetype = 3, colour = "blue") +
+  annotate("text", x = dat$SIR[k], y = 0, label = " Potter's SIR", hjust = 0,
+           vjust = -0.5, colour = "blue", size = 3.5) +
+  scale_colour_manual(values = c("#D95F02", "#7570B3", "#1B9E77"), name = NULL) +
+  coord_cartesian(xlim = c(0.5, 1.8)) +
+  labs(x = "Relative risk, Potter", y = "Posterior density") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "bottom", legend.direction = "vertical")
+```
+
+Borrowing little leaves Potter closer to its own SIR, with a wide curve;
+borrowing a lot pulls it toward its neighbours, with a narrow curve. The data
+make the middle amount the most plausible, so the final curve sits close to
+it. Step 3 then reads the
+answers off the final curve:
+
+```{r}
+#| label: fig-read-curve
+#| code-fold: true
+#| fig-width: 9
+#| fig-height: 3.6
+#| fig-cap: "Potter's final posterior curve. Left: the 95% credible interval leaves 2.5% of the area in each grey tail. Right: the exceedance probability is the red area to the right of 1."
+
+LL <- m2$summary.fitted.values$`0.025quant`[k]
+UL <- m2$summary.fitted.values$`0.975quant`[k]
+P1 <- 1 - inla.pmarginal(1, m2$marginals.fitted.values[[k]])
+
+p_ci <- ggplot(final, aes(x, y)) +
+  geom_area(data = filter(final, x <= LL), fill = "grey70") +
+  geom_area(data = filter(final, x >= UL), fill = "grey70") +
+  geom_line(colour = "darkgreen", linewidth = 1.2) +
+  geom_vline(xintercept = c(LL, UL), linetype = 2) +
+  annotate("text", x = UL + 0.04, y = max(final$y) * 0.6, size = 3.5, hjust = 0,
+           label = paste0("95% credible interval\n", sprintf("%.2f", LL),
+                          " to ", sprintf("%.2f", UL))) +
+  coord_cartesian(xlim = c(0.5, 1.8)) +
+  labs(title = "Credible interval", x = "Relative risk, Potter", y = "Posterior density") +
+  theme_classic(base_size = 12)
+
+p_exc <- ggplot(final, aes(x, y)) +
+  geom_area(data = filter(final, x >= 1), fill = "#d7191c", alpha = 0.5) +
+  geom_line(colour = "darkgreen", linewidth = 1.2) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  annotate("text", x = 1.35, y = max(final$y) * 0.6, size = 3.5,
+           label = paste0("P(risk > 1) = ", sprintf("%.2f", P1))) +
+  coord_cartesian(xlim = c(0.5, 1.8)) +
+  labs(title = "Exceedance probability", x = "Relative risk, Potter", y = NULL) +
+  theme_classic(base_size = 12)
+
+p_ci + p_exc
+```
+
+In R, the same numbers come straight from the curve:
+
+```{r}
+#| label: read-curve
+
+marg <- m2$marginals.fitted.values[[k]]          # Potter's posterior curve
+inla.qmarginal(c(0.025, 0.975), marg)            # 95% credible interval
+1 - inla.pmarginal(1, marg)                      # P(risk > 1)
+```
+
 ## Three maps
 
 ```{r}
@@ -527,7 +653,8 @@ remains is the broad pattern.
 
 For the well we asked: how likely is it that the water is unsafe more than half
 the time? For each county we ask: how likely is it that its risk is above the
-state average, $P(\theta > 1)$? This is the **exceedance probability**.
+state average, $P(\theta > 1)$? This is the **exceedance probability**. It
+is the red area of the figure above, computed for every county.
 
 ```{r}
 #| label: exceed
@@ -573,9 +700,9 @@ sure we are about each county.
 
 Work in pairs, 15 minutes.
 
-1. **Restaurants.** Run `best_guess(2, 5.0, prior_worth = 100)`. What happens
-   to A's best guess? And to B's, `best_guess(800, 4.7, prior_worth = 100)`?
-   Why?
+1. **Restaurants.** Suppose 100 people, not 10, had tried restaurants in the
+   area. Run `best_guess(2, 5.0, borrowed = 100)` and
+   `best_guess(800, 4.7, borrowed = 100)`. What happens to A and to B? Why?
 2. **Well water.** Suppose the family knew nothing about nearby wells and
    started from a flat prior, `a <- 1; b <- 1`. Rerun the updating. How does
    the final best guess change, and why?
