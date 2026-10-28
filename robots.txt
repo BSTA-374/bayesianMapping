@@ -1,0 +1,1 @@
+Sitemap: https://BSTA-374.github.io/bayesianMapping/sitemap.xml
