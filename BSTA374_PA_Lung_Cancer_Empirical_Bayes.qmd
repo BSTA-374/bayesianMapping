@@ -1,0 +1,434 @@
+---
+title: "Empirical Bayes Disease Mapping in Pennsylvania"
+subtitle: "Lung cancer: global and local smoothing"
+author: "Eric M. Delmelle · Lehigh University · BSTA 374"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 2
+    toc-location: left
+    code-fold: show
+    code-copy: true
+    fig-align: center
+    embed-resources: true
+  pdf:
+    papersize: letter
+    geometry:
+      - margin=1in
+    toc: false
+    colorlinks: true
+    code-overflow: wrap
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## Today's goals {.unnumbered}
+
+We will use **lung cancer counts in Pennsylvania's 67 counties (2002)**.
+You already know how to calculate a standardized incidence ratio (SIR).
+Today we focus on *smoothing* those SIRs with two methods:
+**global empirical Bayes (EB)** and **local empirical Bayes (local EB)**.
+
+By the end, you should be able to:
+
+1. explain why a county with few expected cases can have an extreme SIR;
+2. explain the **weighted average** used by empirical Bayes;
+3. distinguish borrowing from the **state** and borrowing from **neighbors**;
+4. interpret the three maps: raw SIR, global EB, and local EB.
+
+::: {.callout-note}
+Install the required packages once. The lung cancer data are already included
+in `SpatialEpi`—no shapefile or CSV download is needed.
+
+```{r}
+#| eval: false
+install.packages(c("sf", "dplyr", "tidyr", "ggplot2", "spdep", "SpatialEpi"))
+```
+:::
+
+```{r}
+#| label: setup
+#| code-fold: false
+
+library(sf)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(spdep)
+library(SpatialEpi)
+```
+
+# 1. A quick reminder: raw SIRs
+
+## Prepare the lung cancer data
+
+The dataset has **16 records per county**, corresponding to combinations of
+race, sex, and age. To obtain an age-, sex-, and race-standardized SIR, we first
+calculate Pennsylvania's rate within each group (stratum).
+
+$$
+E_i = \sum_s P_{is} r_s, \qquad
+\mathrm{SIR}_i = \frac{O_i}{E_i}.
+$$
+
+Here, $O_i$ = observed cases, $E_i$ = expected cases, $P_{is}$ = county
+population in stratum $s$, and $r_s$ = Pennsylvania rate in that stratum.
+**SIR = 1** means the observed count equals the expected count.
+
+```{r}
+#| label: prepare-data
+#| code-fold: false
+
+data("pennLC_sf", package = "SpatialEpi")
+
+# The original sf object contains 16 records per county.
+d <- pennLC_sf |>
+  st_drop_geometry()
+
+# Reference rate for every race / sex / age stratum.
+reference <- d |>
+  group_by(race, gender, age) |>
+  summarise(rate = sum(cases) / sum(population), .groups = "drop")
+
+# One record per county: observed cases, expected cases, and SIR.
+county_data <- d |>
+  left_join(reference, by = c("race", "gender", "age")) |>
+  group_by(county) |>
+  summarise(O = sum(cases), E = sum(population * rate), .groups = "drop") |>
+  mutate(county = as.character(county), SIR = O / E)
+
+# Keep one polygon per county and attach our calculations.
+pa <- pennLC_sf |>
+  group_by(county) |>
+  slice(1) |>
+  ungroup() |>
+  select(county) |>
+  mutate(county = as.character(county)) |>
+  left_join(county_data, by = "county") |>
+  arrange(county)
+
+stopifnot(nrow(pa) == 67, !anyNA(pa$O), all(pa$E > 0))
+
+pa |>
+  st_drop_geometry() |>
+  summarise(counties = n(), observed_cases = sum(O),
+            expected_cases = round(sum(E)))
+```
+
+## Look at the raw SIRs
+
+```{r}
+#| label: fig-raw-sir
+#| fig-height: 4
+#| fig-cap: "Raw lung cancer SIRs in Pennsylvania counties, 2002."
+
+# Fixed breaks will be reused for all three maps.
+risk_breaks <- c(0, 0.67, 0.83, 0.95, 1.05, 1.20, 1.50, Inf)
+risk_labels <- c("<0.67", "0.67–0.83", "0.83–0.95", "0.95–1.05",
+                 "1.05–1.20", "1.20–1.50", ">1.50")
+
+risk_class <- function(x) {
+  cut(x, breaks = risk_breaks, labels = risk_labels,
+      include.lowest = TRUE)
+}
+
+ggplot(pa) +
+  geom_sf(aes(fill = risk_class(SIR)), colour = "white", linewidth = 0.15) +
+  scale_fill_brewer(palette = "RdBu", direction = -1,
+                    drop = FALSE, name = "SIR") +
+  theme_void(base_size = 12) +
+  theme(legend.position = "bottom") +
+  guides(fill = guide_legend(nrow = 2, byrow = TRUE))
+```
+
+Consider the counties with the lowest and highest SIRs. Look not only at the
+SIR but also at **E**, the expected number of cases.
+
+```{r}
+#| label: table-extreme-sir
+
+county_data |>
+  arrange(SIR) |>
+  slice(c(1:3, (n() - 2):n())) |>
+  mutate(E = round(E, 1), SIR = round(SIR, 2))
+```
+
+An SIR can change dramatically when a county has only a small number of
+expected cases. **Empirical Bayes reduces the influence of such extreme raw
+values.**
+
+# 2. Global empirical Bayes: borrow from Pennsylvania
+
+## One simple formula
+
+A global empirical Bayes estimate is a weighted average of the county's raw
+SIR and the overall Pennsylvania reference:
+
+$$
+\widehat\theta_i = w_i\,\mathrm{SIR}_i + (1-w_i)\,m,
+\qquad
+w_i = \frac{a}{a + m/E_i}.
+$$
+
+- $m$: overall reference (approximately **1** because the expected counts were
+  calculated using Pennsylvania rates);
+- $a$: estimated between-county variation;
+- $w_i$: weight placed on the county's own SIR, between 0 and 1.
+
+When $E_i$ is small, $w_i$ tends to be smaller and the county's SIR moves
+more toward the statewide reference. The data determine $a$ and $m$; we do
+not choose arbitrary weights.
+
+## Run global empirical Bayes
+
+```{r}
+#| label: global-eb
+#| code-fold: false
+
+# Counts (O) and expected cases (E) give smoothed relative risks.
+eb_global <- EBest(pa$O, pa$E, family = "poisson")
+pa$RR_global <- eb_global$estmm
+
+# In the Poisson implementation, parameters are called 'a' and 'b'.
+# 'b' is the overall reference m; 'a' is between-county variation.
+par_global <- attr(eb_global, "parameters")
+a_global <- par_global$a
+m_global <- par_global$b
+
+# Weight on the county's observed SIR.
+pa$w_global <- a_global / (a_global + m_global / pa$E)
+
+# Confirm the weighted-average formula reproduces EBest() results.
+stopifnot(isTRUE(all.equal(
+  unname(pa$RR_global),
+  unname(pa$w_global * pa$SIR + (1 - pa$w_global) * m_global),
+  tolerance = 1e-7
+)))
+
+c(state_reference = m_global, between_county_variation = a_global)
+```
+
+```{r}
+#| label: table-global-eb
+
+pa |>
+  st_drop_geometry() |>
+  filter(county %in% c("sullivan", "potter", "venango",
+                       "lehigh", "philadelphia")) |>
+  arrange(E) |>
+  transmute(county, O, expected = round(E, 1),
+            raw_SIR = round(SIR, 2),
+            weight = round(w_global, 2),
+            global_EB = round(RR_global, 2))
+```
+
+A weight near **1** preserves most of the original SIR. A weight near **0**
+means more borrowing from the statewide reference.
+
+```{r}
+#| label: fig-global-weight
+#| fig-height: 4
+#| fig-cap: "Weight on the original county SIR in the global EB estimate."
+
+ggplot(pa) +
+  geom_sf(aes(fill = w_global), colour = "white", linewidth = 0.15) +
+  scale_fill_viridis_c(limits = c(0, 1), name = "Weight on SIR") +
+  theme_void(base_size = 12)
+```
+
+**Question:** Which counties retain more of their own SIR—the large or small
+counties? Why?
+
+# 3. Local empirical Bayes: borrow from neighbors
+
+## Define the neighbors
+
+Instead of one statewide reference, local EB uses a **different neighborhood
+reference for each county**. We begin with **queen contiguity**: counties are
+neighbors when they share part of a boundary or a corner.
+
+```{r}
+#| label: neighbors
+#| code-fold: false
+
+nb <- poly2nb(pa, queen = TRUE)
+stopifnot(length(nb) == nrow(pa), all(card(nb) > 0))
+
+# Inspect the neighbors of Lehigh County.
+i <- match("lehigh", pa$county)
+pa$county[nb[[i]]]
+```
+
+```{r}
+#| label: fig-neighbors
+#| fig-height: 4
+#| fig-cap: "Lehigh County and its queen-contiguity neighbors."
+
+pa$neighbor_group <- "Other counties"
+pa$neighbor_group[nb[[i]]] <- "Lehigh's neighbors"
+pa$neighbor_group[i] <- "Lehigh"
+
+ggplot(pa) +
+  geom_sf(aes(fill = neighbor_group), colour = "grey55", linewidth = 0.15) +
+  scale_fill_manual(values = c("Lehigh" = "#b2182b",
+                               "Lehigh's neighbors" = "#92c5de",
+                               "Other counties" = "grey92"),
+                    name = NULL) +
+  theme_void(base_size = 12) +
+  theme(legend.position = "bottom")
+```
+
+## Run local empirical Bayes
+
+```{r}
+#| label: local-eb
+#| code-fold: false
+
+# Local EB uses neighbors' counts and expected cases.
+eb_local <- EBlocal(pa$O, pa$E, nb,
+                    zero.policy = FALSE, spChk = FALSE)
+pa$RR_local <- eb_local$est
+
+# Each county has its own local reference and its own smoothing weight.
+par_local <- attr(eb_local, "parameters")
+pa$m_local <- par_local$m
+pa$w_local <- par_local$a /
+  (par_local$a + par_local$m / pa$E)
+
+stopifnot(all(is.finite(pa$RR_local)))
+```
+
+Local EB follows the same idea as global EB, but replaces the statewide
+reference with a **neighborhood reference**. For this function, that reference
+is calculated from the neighboring counties (not the focal county). The local
+reference and weight may differ substantially from place to place.
+
+```{r}
+#| label: table-local-eb
+
+pa |>
+  st_drop_geometry() |>
+  filter(county %in% c("sullivan", "potter", "venango",
+                       "lehigh", "philadelphia")) |>
+  arrange(E) |>
+  transmute(county, expected = round(E, 1),
+            raw_SIR = round(SIR, 2),
+            neighbor_reference = round(m_local, 2),
+            local_weight = round(w_local, 2),
+            local_EB = round(RR_local, 2))
+```
+
+For example, Lehigh County has the following values:
+
+```{r}
+#| label: lehigh-example
+
+pa |>
+  st_drop_geometry() |>
+  filter(county == "lehigh") |>
+  transmute(county,
+            SIR = round(SIR, 2),
+            state_reference = round(m_global, 2),
+            neighbor_reference = round(m_local, 2),
+            global_EB = round(RR_global, 2),
+            local_EB = round(RR_local, 2))
+```
+
+**Question:** Why is the local EB estimate not necessarily closer to 1 than
+the raw SIR? Think about the risk in the neighboring counties.
+
+# 4. Compare all three maps
+
+```{r}
+#| label: fig-three-maps
+#| fig-width: 10
+#| fig-height: 4.2
+#| fig-cap: "Raw SIR, global EB and local EB. Identical map classes allow direct comparison."
+
+pa |>
+  select(county, SIR, RR_global, RR_local) |>
+  pivot_longer(cols = c(SIR, RR_global, RR_local),
+               names_to = "method", values_to = "risk") |>
+  mutate(method = factor(method,
+                         levels = c("SIR", "RR_global", "RR_local"),
+                         labels = c("Raw SIR", "Global EB", "Local EB"))) |>
+  ggplot() +
+  geom_sf(aes(fill = risk_class(risk)), colour = "white", linewidth = 0.1) +
+  facet_wrap(~ method, nrow = 1) +
+  scale_fill_brewer(palette = "RdBu", direction = -1,
+                    drop = FALSE, name = "Relative risk") +
+  theme_void(base_size = 11) +
+  theme(legend.position = "bottom") +
+  guides(fill = guide_legend(nrow = 2, byrow = TRUE))
+```
+
+Let's also look at the counties whose estimated risk changes the most.
+
+```{r}
+#| label: table-changes
+
+pa |>
+  st_drop_geometry() |>
+  mutate(change_global = abs(RR_global - SIR),
+         change_local = abs(RR_local - SIR)) |>
+  arrange(desc(change_global)) |>
+  slice_head(n = 8) |>
+  transmute(county, expected = round(E),
+            SIR = round(SIR, 2),
+            global_EB = round(RR_global, 2),
+            local_EB = round(RR_local, 2),
+            global_change = round(change_global, 2))
+```
+
+::: {.callout-tip}
+## Remember
+
+**Global EB:** each county borrows from the same Pennsylvania reference.
+
+**Local EB:** each county borrows from its own surrounding neighbors.
+
+Both methods produce **smoothed relative risks**, but they need not give the
+same result, and local smoothing is not automatically better than global
+smoothing.
+:::
+
+# 5. In-class exercise: 15 minutes {.unnumbered}
+
+Work in pairs. Use your maps and the R output, and answer in plain English.
+
+1. **Raw versus global EB (5 minutes).** Choose a county with a high raw SIR
+   and relatively few expected cases. Report its $O$, $E$, SIR and global EB
+   estimate. Did its risk estimate move toward 1? Explain why.
+2. **Global versus local EB (5 minutes).** For **Lehigh County**, report the
+   raw SIR, global EB, local EB, and the local neighborhood reference. In one
+   or two sentences, explain why the two smoothed estimates differ.
+3. **Think spatially (5 minutes).** Compare the three maps. Identify one area
+   whose appearance changes noticeably after smoothing. Which reference—state
+   or neighbors—would be more appropriate for the question you want to ask?
+
+# Key takeaways {.unnumbered}
+
+- **SIR = O / E:** compares observed to expected cases.
+- **Global empirical Bayes:** a weighted average of the county SIR and a
+  statewide reference.
+- **Local empirical Bayes:** a weighted average of the county SIR and a
+  neighborhood reference.
+- **Smoothing weights:** determined by the data; counties with smaller
+  expected counts often borrow more.
+- **Geography matters:** changing the definition of neighbors can change a
+  local EB map.
+
+# References {.unnumbered}
+
+- Marshall, R. J. (1991). Mapping disease and mortality rates using
+  empirical Bayes estimators. *Applied Statistics*, 40(2), 283–294.
+- Clayton, D., & Kaldor, J. (1987). Empirical Bayes estimates of
+  age-standardized relative risks for use in disease mapping. *Biometrics*,
+  43(3), 671–681.
+- Dataset: `SpatialEpi::pennLC_sf` (Pennsylvania lung cancer, 2002).
+- R documentation:
+  [spdep global EB](https://r-spatial.github.io/spdep/reference/EBest.html) and
+  [spdep local EB](https://r-spatial.github.io/spdep/reference/EBlocal.html).

@@ -1,0 +1,575 @@
+---
+title: "INLA, BYM and BYM2 in Pictures"
+subtitle: "Same counties, three ways to read a map"
+author: "Eric M. Delmelle · Lehigh University"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 2
+    toc-location: left
+    toc-title: "On this page"
+    number-sections: true
+    code-fold: true
+    code-copy: true
+    code-tools: true
+    highlight-style: github
+    fig-width: 9
+    fig-height: 3.6
+    fig-align: center
+    df-print: kable
+    embed-resources: true
+  pdf:
+    papersize: letter
+    geometry:
+      - margin=1in
+    toc: false
+    colorlinks: true
+    code-overflow: wrap
+execute:
+  warning: false
+  message: false
+---
+
+## Today {.unnumbered}
+
+Last time we smoothed the Pennsylvania lung cancer map. Today we open the box:
+what INLA does, and what is inside the BYM and BYM2 models. Mostly pictures.
+Reading: **Moraga §5.2--5.3**.
+
+| Model | log-risk of county $i$ | In words |
+|---|---|---|
+| Raw SIR | --- | each county on its own |
+| BYM | $\beta_0 + u_i + v_i$ | overall level + a neighbours map + a noise map |
+| BYM2 | $\beta_0 +$ mix of $u_i$ and $v_i$ | the same two maps, mixed with one knob, $\phi$ |
+
+```{r}
+#| label: setup
+#| code-fold: false
+
+library(sf)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+library(spdep)
+library(SpatialEpi)   # pennLC
+library(INLA)
+```
+
+```{r}
+#| label: data
+#| code-summary: "Data and map helpers (same data as last lecture)"
+
+data(pennLC)
+d <- pennLC$data
+
+ref <- d |>
+  group_by(race, gender, age) |>
+  summarise(r = sum(cases) / sum(population), .groups = "drop")   # reference rates
+
+county <- d |>
+  left_join(ref, by = c("race", "gender", "age")) |>
+  group_by(county) |>
+  summarise(O = sum(cases), E = sum(population * r), .groups = "drop") |>
+  mutate(county = as.character(county), SIR = O / E)
+
+pa <- st_as_sf(pennLC$spatial.polygon) |>
+  st_set_crs(4326) |>
+  mutate(county = names(pennLC$spatial.polygon)) |>
+  st_transform(5070) |>                                           # Albers
+  left_join(county, by = "county")
+
+risk_breaks <- c(0, 0.67, 0.83, 0.95, 1.05, 1.2, 1.5, Inf)
+risk_labels <- c("< 0.67", "0.67-0.83", "0.83-0.95", "0.95-1.05",
+                 "1.05-1.2", "1.2-1.5", "> 1.5")
+
+map_risk <- function(values, title = NULL) {                     # relative risk, fixed classes
+  ggplot(pa) +
+    geom_sf(aes(fill = cut(values, risk_breaks, risk_labels)),
+            colour = "white", linewidth = 0.15) +
+    scale_fill_brewer(palette = "RdBu", direction = -1, drop = FALSE,
+                      name = "Relative\nrisk") +
+    labs(title = title) +
+    theme_void(base_size = 11)
+}
+
+map_effect <- function(values, title = NULL, lim = max(abs(values))) {   # log scale, centred on 0
+  ggplot(pa) +
+    geom_sf(aes(fill = values), colour = "white", linewidth = 0.15) +
+    scale_fill_distiller(palette = "RdBu", limits = c(-lim, lim),
+                         oob = scales::squish, name = "Effect\n(log scale)") +
+    labs(title = title) +
+    theme_void(base_size = 11)
+}
+
+tc <- function(x) tools::toTitleCase(x)                          # county names
+f2 <- function(x) sprintf("%.2f", x)                             # two decimals
+```
+
+# The problem in one picture
+
+```{r}
+#| label: fig-problem
+#| fig-cap: "Left: raw SIRs. Right: how much data each county has."
+
+p_data <- ggplot(pa) +
+  geom_sf(aes(fill = E), colour = "white", linewidth = 0.15) +
+  scale_fill_distiller(palette = "Greens", direction = 1, trans = "log10",
+                       name = "Expected\ncases") +
+  labs(title = "How much data?") +
+  theme_void(base_size = 11)
+
+map_risk(pa$SIR, "Raw SIR = O / E") + p_data
+```
+
+The darkest reds and blues on the left tend to sit in the palest counties on
+the right: little data, noisy SIR. Every model today is a way to **borrow**
+information so these counties calm down.
+
+# INLA in two pictures
+
+## What we want: a curve, not a number
+
+A Bayesian model returns, for each county, a whole **posterior curve**: which
+relative risks are plausible, and how plausible. There are two ways to get it.
+
+```{r}
+#| label: fig-mcmc-inla
+#| fig-cap: "Same posterior, two routes. MCMC draws random values and builds a histogram; INLA computes the curve."
+
+a <- 8; b <- 7                                     # an illustrative posterior
+set.seed(374)
+
+hist_panel <- function(n) {
+  ggplot(tibble(x = rgamma(n, a, b)), aes(x)) +
+    geom_histogram(aes(y = after_stat(density)), binwidth = 0.1, boundary = 0,
+                   fill = "grey60", colour = "white") +
+    coord_cartesian(xlim = c(0, 3), ylim = c(0, 1.8)) +
+    labs(title = paste0("MCMC: ", format(n, big.mark = ","), " draws"),
+         x = "Relative risk", y = NULL) +
+    theme_classic(base_size = 11)
+}
+
+p_inla <- ggplot(tibble(x = seq(0, 3, 0.01)), aes(x, dgamma(x, a, b))) +
+  geom_area(fill = "darkgreen", alpha = 0.25) +
+  geom_line(colour = "darkgreen", linewidth = 1) +
+  coord_cartesian(xlim = c(0, 3), ylim = c(0, 1.8)) +
+  labs(title = "INLA: the curve", x = "Relative risk", y = NULL) +
+  theme_classic(base_size = 11)
+
+hist_panel(100) + hist_panel(5000) + p_inla
+```
+
+**MCMC** is like a poll: draw thousands of plausible values and count them. It
+works for almost any model, but it is slow, and you must check that it drew
+enough. **INLA** skips the drawing and computes the curve with an
+approximation. For disease maps it takes seconds, and its curves are usually
+very close to MCMC's (Rue et al. 2009).
+
+## The trick: a bell curve at the top
+
+```{r}
+#| label: fig-laplace
+#| fig-width: 6.5
+#| fig-height: 3.4
+#| fig-cap: "The Laplace approximation: a bell curve with the same peak and the same width at the top."
+
+peak  <- (a - 1) / b                               # top of the curve
+width <- sqrt(a - 1) / b                           # width at the top
+
+tibble(x = seq(0, 3, 0.01),
+       `True curve`     = dgamma(x, a, b),
+       `Bell (Laplace)` = dnorm(x, peak, width)) |>
+  pivot_longer(-x, names_to = "curve", values_to = "density") |>
+  ggplot(aes(x, density, colour = curve, linetype = curve)) +
+  geom_vline(xintercept = peak, colour = "grey60", linetype = 3) +
+  geom_line(linewidth = 1) +
+  scale_colour_manual(values = c("True curve" = "darkgreen", "Bell (Laplace)" = "darkorange")) +
+  scale_linetype_manual(values = c("True curve" = 1, "Bell (Laplace)" = 2)) +
+  labs(x = "Relative risk", y = NULL, colour = NULL, linetype = NULL) +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "top")
+```
+
+Close, not exact. INLA works on the log scale, where curves are closer to a
+bell, and then corrects the bell. The name says the rest:
+
+| Letters | Stands for | In plain words |
+|---|---|---|
+| I | Integrated | averages over the few unknown settings of the model, e.g. how smooth the map is |
+| N | Nested | approximations inside approximations: first those settings, then each county |
+| LA | Laplace Approximation | a bell curve fitted at the top of each curve, then refined |
+
+::: {.callout-tip}
+## Key idea
+You never see any of this. You write a formula; INLA returns one curve per
+county. Today only the `model = ...` part of the formula changes.
+:::
+
+```{r}
+#| label: template
+#| eval: false
+#| code-fold: false
+
+inla(O ~ 1 + f(id, model = "...", graph = g),     # overall level + county effects
+     family = "poisson", E = E,                   # counts against expected cases
+     data = dat)
+```
+
+# Who are my neighbours?
+
+```{r}
+#| label: neighbours
+#| code-fold: show
+
+nb <- poly2nb(pa, queen = TRUE)                    # queen neighbours
+nb2INLA("pa.adj", nb)                              # write for INLA
+g  <- inla.read.graph("pa.adj")
+
+dat <- st_drop_geometry(pa) |>
+  mutate(id = row_number())                        # one index per county
+```
+
+```{r}
+#| label: fig-graph
+#| fig-height: 4.2
+#| fig-cap: "Each line joins two neighbours. Orange: Centre County. Light orange: its neighbours."
+
+ic <- which(pa$county == "centre")                 # Centre County
+xy <- unname(st_coordinates(st_point_on_surface(st_geometry(pa))))   # one point per county
+
+links <- do.call(rbind, lapply(seq_along(nb), function(i) {
+  j <- nb[[i]][nb[[i]] > i]                        # each pair once
+  if (length(j) == 0) return(NULL)
+  data.frame(x = xy[i, 1], y = xy[i, 2], xend = xy[j, 1], yend = xy[j, 2],
+             centre = i == ic | j == ic)
+}))
+
+ggplot() +
+  geom_sf(data = pa, fill = "grey95", colour = "white") +
+  geom_sf(data = pa[nb[[ic]], ], fill = "#FDD49E", colour = "white") +   # neighbours
+  geom_sf(data = pa[ic, ], fill = "#E6550D", colour = "white") +         # Centre
+  geom_segment(data = links,
+               aes(x, y, xend = xend, yend = yend, colour = centre, linewidth = centre)) +
+  geom_point(data = data.frame(X = xy[, 1], Y = xy[, 2]), aes(X, Y), size = 0.8) +
+  scale_colour_manual(values = c(`FALSE` = "grey55", `TRUE` = "black"), guide = "none") +
+  scale_linewidth_manual(values = c(`FALSE` = 0.3, `TRUE` = 0.9), guide = "none") +
+  theme_void()
+```
+
+Centre County has `r length(nb[[ic]])` neighbours. In BYM and BYM2, a county
+borrows from the counties it is linked to, not from the whole state.
+
+# BYM: two hidden maps
+
+## Neighbours map and noise map
+
+BYM (Besag, York and Mollié 1991) says the log-risk of county $i$ is an overall
+level plus two hidden maps:
+
+$$
+\log \theta_i \;=\; \beta_0 \;+\; \underbrace{u_i}_{\text{neighbours}} \;+\; \underbrace{v_i}_{\text{noise}}
+$$
+
+What do these two maps look like before we see any data? Here is one random
+draw of each.
+
+```{r}
+#| label: fig-u-v-sim
+#| fig-cap: "Left: u, a smooth map where neighbours look alike (structured). Right: v, pure county-to-county noise (unstructured). Simulated."
+
+W <- nb2mat(nb, style = "B")                       # 1 = neighbours
+Q <- diag(rowSums(W)) - 0.99 * W                   # nearly the ICAR (Besag) prior
+set.seed(374)
+u_sim <- as.vector(scale(backsolve(chol(Q), rnorm(nrow(pa)))))   # smooth map
+v_sim <- as.vector(scale(rnorm(nrow(pa))))                       # pure noise
+
+map_effect(u_sim, "u: neighbours look alike", lim = 2.5) +
+  map_effect(v_sim, "v: every county for itself", lim = 2.5) +
+  plot_layout(guides = "collect")
+```
+
+A real map is a mix of both. BYM lets the data decide how much of each.
+
+## Fitting BYM
+
+```{r}
+#| label: m-bym
+#| code-fold: show
+
+dat$idu <- dat$id                                  # one index per f() term
+dat$idv <- dat$id
+
+m_bym <- inla(O ~ 1 + f(idu, model = "besag", graph = g) +   # u: neighbours
+                      f(idv, model = "iid"),                 # v: noise
+              family = "poisson", E = E, data = dat,
+              control.predictor = list(compute = TRUE),
+              control.compute = list(dic = TRUE, waic = TRUE))
+
+b0         <- m_bym$summary.fixed["(Intercept)", "mean"]   # overall level
+dat$u      <- m_bym$summary.random$idu$mean                # neighbours map
+dat$v      <- m_bym$summary.random$idv$mean                # noise map
+dat$RR_bym <- m_bym$summary.fitted.values$mean             # relative risk
+```
+
+Writing BYM as two `f()` terms shows its two pieces. INLA also offers it in
+one piece, `model = "bym"`.
+
+## The BYM map as an addition
+
+```{r}
+#| label: fig-bym-sum
+#| fig-width: 11
+#| fig-height: 3.4
+#| fig-cap: "Pennsylvania's BYM map, piece by piece. The first three maps share one colour scale."
+
+lim <- max(abs(c(b0, dat$u, dat$v)))               # one scale for the pieces
+
+map_effect(rep(b0, nrow(pa)), "Overall level", lim) +
+  map_effect(dat$u, "+ u (neighbours)", lim) +
+  map_effect(dat$v, "+ v (noise)", lim) +
+  map_risk(exp(b0 + dat$u + dat$v), "= relative risk") +
+  plot_layout(nrow = 1, guides = "collect") &
+  theme(legend.position = "bottom")
+```
+
+Read it left to right. The overall level is the same everywhere. Then each
+county gets a bump from its neighbourhood ($u$) and a bump of its own ($v$).
+Because the three pieces share one scale, the stronger colours show which
+hidden map carries more of Pennsylvania's pattern.
+
+::: {.callout-warning}
+## The catch with BYM
+BYM has two knobs: how much $u$ varies and how much $v$ varies. They are hard
+to read, and they compete: the data cannot easily tell which map should carry
+a pattern, so the two knobs are hard to estimate and to set priors for
+(Riebler et al. 2016). BYM2 replaces them with two knobs that mean something.
+:::
+
+# BYM2: one knob, φ
+
+## Turning the knob
+
+BYM2 keeps the same two hidden maps and mixes them:
+
+$$
+\log \theta_i \;=\; \beta_0 \;+\; \frac{1}{\sqrt{\tau}}
+\Big(\sqrt{\phi}\;u_i^{*} \;+\; \sqrt{1-\phi}\;v_i\Big)
+$$
+
+$u^*$ is $u$ rescaled to the same typical size as $v$. Then $\tau$ says
+**how much** counties differ, and $\phi$, between 0 and 1, says **how
+spatial** the differences are. Here is the knob, on the two simulated maps from
+above:
+
+```{r}
+#| label: fig-phi-knob
+#| fig-width: 11
+#| fig-height: 2.6
+#| fig-cap: "Mixing the same two maps with φ. Left: all noise. Right: all neighbours. Every panel has the same total variation."
+
+phis <- c(0, 0.25, 0.5, 0.75, 1)
+
+knob <- lapply(phis, function(p) {
+  map_effect(sqrt(p) * u_sim + sqrt(1 - p) * v_sim,   # BYM2 mix
+             bquote(phi == .(p)), lim = 2.5) +
+    theme(legend.position = "none")
+})
+
+wrap_plots(knob, nrow = 1)
+```
+
+Only the **shape** of the map changes with $\phi$, not how much it varies.
+That is why $\phi$ is easy to read: the share of the variation that is spatial.
+
+## Fitting BYM2
+
+```{r}
+#| label: m-bym2
+#| code-fold: show
+
+m_bym2 <- inla(O ~ 1 + f(id, model = "bym2", graph = g),    # both maps in one term
+               family = "poisson", E = E, data = dat,
+               control.predictor = list(compute = TRUE),
+               control.compute = list(dic = TRUE, waic = TRUE,
+                                      return.marginals.predictor = TRUE))
+
+dat$RR_bym2 <- m_bym2$summary.fitted.values$mean            # relative risk
+round(m_bym2$summary.hyperpar[, 1:5], 2)                    # τ and φ
+```
+
+We use INLA's default priors; Moraga §5.3 shows how to set your own.
+
+## Where does Pennsylvania sit on the knob?
+
+```{r}
+#| label: fig-phi-post
+#| fig-width: 6.5
+#| fig-height: 3.4
+#| fig-cap: "Posterior curve of φ for lung cancer in Pennsylvania. Dashed: posterior mean."
+
+phi_curve <- inla.smarginal(m_bym2$marginals.hyperpar$`Phi for id`)   # INLA's curve
+phi_mean  <- m_bym2$summary.hyperpar["Phi for id", "mean"]
+phi_ci    <- unlist(m_bym2$summary.hyperpar["Phi for id", c("0.025quant", "0.975quant")])
+
+ggplot(as.data.frame(phi_curve), aes(x, y)) +
+  geom_area(fill = "purple", alpha = 0.2) +
+  geom_line(colour = "purple", linewidth = 1) +
+  geom_vline(xintercept = phi_mean, colour = "purple", linetype = 2) +
+  annotate("label", x = c(0, 1), y = 0, label = c("all noise", "all neighbours"),
+           hjust = c(0, 1), vjust = 0, size = 3.5) +
+  coord_cartesian(xlim = c(0, 1)) +
+  labs(x = expression(paste(phi, ", share of the variation that is spatial")), y = NULL) +
+  theme_classic(base_size = 12)
+```
+
+The posterior mean of $\phi$ is `r f2(phi_mean)`, with 95% probability between
+`r f2(phi_ci[1])` and `r f2(phi_ci[2])`. In the knob figure, Pennsylvania sits
+closest to the panel $\phi$ = `r phis[which.min(abs(phis - phi_mean))]`. BYM
+could only hint at this by comparing colours; BYM2 gives it as one number,
+with its uncertainty.
+
+# Three maps, side by side
+
+```{r}
+#| label: fig-three-maps
+#| fig-width: 11
+#| fig-height: 3.6
+#| fig-cap: "Raw SIR, BYM and BYM2. Same colours."
+
+map_risk(dat$SIR, "Raw SIR") +
+  map_risk(dat$RR_bym, "BYM") +
+  map_risk(dat$RR_bym2, "BYM2") +
+  plot_layout(nrow = 1, guides = "collect") &
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: fig-slope
+#| fig-width: 6.5
+#| fig-height: 5
+#| fig-cap: "Where each county goes. Each line is one county; dark lines are small counties."
+
+dat |>
+  select(county, E, `Raw SIR` = SIR, BYM = RR_bym, BYM2 = RR_bym2) |>
+  pivot_longer(c(`Raw SIR`, BYM, BYM2), names_to = "estimate", values_to = "risk") |>
+  mutate(estimate = factor(estimate, c("Raw SIR", "BYM", "BYM2"))) |>
+  ggplot(aes(estimate, risk, group = county, colour = E)) +
+  geom_hline(yintercept = 1, linetype = 2) +
+  geom_line(alpha = 0.7) +
+  geom_point(size = 1.5) +
+  scale_colour_viridis_c(option = "plasma", end = 0.9, trans = "log10",
+                         name = "Expected\ncases") +
+  scale_y_log10() +
+  labs(x = NULL, y = "Relative risk (log scale)") +
+  theme_minimal(base_size = 12)
+```
+
+Small counties start far from 1 and are pulled in; big counties barely move.
+BYM and BYM2 nearly agree: the largest difference for any county is
+`r f2(max(abs(dat$RR_bym - dat$RR_bym2)))`.
+
+```{r}
+#| label: fit
+#| code-fold: show
+
+tibble(model = c("BYM", "BYM2"),
+       DIC   = c(m_bym$dic$dic,   m_bym2$dic$dic),
+       WAIC  = c(m_bym$waic$waic, m_bym2$waic$waic)) |>
+  mutate(across(c(DIC, WAIC), \(x) round(x, 1)))       # lower is better
+```
+
+Lower is better, but a difference of a few points means little. We prefer
+BYM2 not for a better map but because its knobs mean something.
+
+# What we report
+
+```{r}
+#| label: exceed
+#| code-fold: show
+
+dat$p_exc <- sapply(m_bym2$marginals.fitted.values,
+                    \(m) 1 - inla.pmarginal(1, m))   # P(risk > 1)
+```
+
+```{r}
+#| label: fig-report
+#| fig-height: 3.8
+#| fig-cap: "Left: best guess (BYM2). Right: probability that the risk is above the state average."
+
+exc_cols <- c("Probably lower (< 0.2)"  = "#2c7bb6",
+              "Uncertain (0.2-0.8)"     = "grey90",
+              "Probably higher (> 0.8)" = "#d7191c")
+exc <- cut(dat$p_exc, c(0, 0.2, 0.8, 1), labels = names(exc_cols),
+           include.lowest = TRUE)
+
+p_exc <- ggplot(pa) +
+  geom_sf(aes(fill = exc), colour = "white", linewidth = 0.15) +
+  scale_fill_manual(values = exc_cols, drop = FALSE, name = NULL) +
+  labs(title = "How sure? P(risk > 1)") +
+  theme_void(base_size = 11)
+
+map_risk(dat$RR_bym2, "Best guess (BYM2)") + p_exc
+```
+
+A good disease map comes in pairs: the best guess, and how sure we are about
+it.
+
+# Check yourself {.unnumbered}
+
+1. In the BYM addition figure, which hidden map, $u$ or $v$, has the stronger
+   colours? What does that say about $\phi$?
+2. In the slope chart, find the line that moves the most. Is it a small or a
+   big county? Why?
+3. If $\phi$ were 0, what would BYM2 become? Which method from last lecture
+   does it resemble?
+
+# Cheat sheet {.unnumbered}
+
+```{r}
+#| label: cheat
+#| eval: false
+#| code-fold: false
+
+nb <- poly2nb(pa)                                          # 1. neighbours
+nb2INLA("pa.adj", nb); g <- inla.read.graph("pa.adj")
+dat$id <- 1:nrow(dat)                                      # 2. one index per county
+
+m <- inla(O ~ 1 + f(id, model = "bym2", graph = g),        # 3. model
+          family = "poisson", E = E, data = dat,
+          control.predictor = list(compute = TRUE))
+
+dat$RR <- m$summary.fitted.values$mean                     # 4. relative risk
+m$summary.hyperpar                                         # 5. τ and φ
+```
+
+# Words to know {.unnumbered}
+
+| Word | Plain meaning |
+|---|---|
+| INLA | a fast way to compute posterior curves, without drawing samples |
+| Laplace approximation | a bell curve fitted at the top of a curve |
+| $u$, structured effect | hidden map where neighbours look alike (ICAR, or Besag, prior) |
+| $v$, unstructured effect | hidden map of county-to-county noise |
+| BYM | overall level + $u$ + $v$ |
+| BYM2 | the same two maps, mixed by $\phi$ |
+| $\phi$ | share of the variation between counties that is spatial |
+| $\tau$ | precision: how little counties differ overall (large $\tau$, small differences) |
+
+# References {.unnumbered}
+
+Besag, J., York, J., & Mollié, A. (1991). Bayesian image restoration, with two
+applications in spatial statistics. *Annals of the Institute of Statistical
+Mathematics*, 43(1), 1--20.
+
+Moraga, P. (2019). *Geospatial health data: Modeling and visualization with
+R-INLA and Shiny*. Chapman & Hall/CRC, Ch. 5.
+
+Riebler, A., Sørbye, S. H., Simpson, D., & Rue, H. (2016). An intuitive
+Bayesian spatial model for disease mapping that accounts for scaling.
+*Statistical Methods in Medical Research*, 25(4), 1145--1165.
+
+Rue, H., Martino, S., & Chopin, N. (2009). Approximate Bayesian inference for
+latent Gaussian models by using integrated nested Laplace approximations.
+*Journal of the Royal Statistical Society: Series B*, 71(2), 319--392.

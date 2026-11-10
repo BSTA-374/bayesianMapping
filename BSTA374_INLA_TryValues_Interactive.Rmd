@@ -1,0 +1,1030 @@
+---
+title: "How INLA handles what it does not know"
+subtitle: "Try several values, give each a weight, average. Step by step."
+author: "Eric M. Delmelle · Lehigh University"
+output:
+  html_document:
+    theme: cosmo
+    toc: true
+    toc_float: true
+runtime: shiny
+---
+
+<!-- Open in RStudio and click "Run Document". It takes about 20 seconds to start.
+     Packages: shiny, shinyWidgets, SpatialEpi, dplyr, ggplot2, sf, spdep. -->
+
+```{css, echo = FALSE}
+.recalculating { opacity: 1 !important; }   /* no fading while animating */
+.step { background: #f3f6fa; border-left: 4px solid #2c7bb6; padding: 10px 16px; margin: 14px 0; }
+```
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.align = "center")
+library(shiny)
+library(shinyWidgets) # knobs
+library(SpatialEpi)   # pennLC data
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(spdep)        # neighbours
+```
+
+```{r data, include = FALSE}
+data(pennLC)
+
+ref <- pennLC$data |>
+  group_by(race, gender, age) |>
+  summarise(r = sum(cases) / sum(population), .groups = "drop")   # state rates
+
+d <- pennLC$data |>
+  left_join(ref, by = c("race", "gender", "age")) |>
+  group_by(county) |>
+  summarise(O = sum(cases), E = sum(population * r), .groups = "drop") |>
+  mutate(county = as.character(county), SIR = O / E)
+
+pa <- st_as_sf(pennLC$spatial.polygon) |>
+  st_set_crs(4326) |>
+  st_transform(5070) |>
+  mutate(county = names(pennLC$spatial.polygon))
+d  <- d[match(pa$county, d$county), ]              # same order as the map
+
+O  <- d$O                                          # observed cases
+E  <- d$E                                          # expected cases
+n  <- nrow(d)                                      # 67 counties
+ip <- which(d$county == "potter")
+tc <- function(x) sub("Mck", "McK", tools::toTitleCase(x))
+
+by_size  <- order(d$E)                             # county menu, small to large
+counties <- setNames(d$county[by_size],
+                     paste0(tc(d$county[by_size]), " (E = ", round(d$E[by_size]), ")"))
+rr <- seq(0.4, 2, by = 0.005)                      # relative risk axis
+
+risk_breaks <- c(0, 0.67, 0.83, 0.95, 1.05, 1.2, 1.5, Inf)        # same classes as before
+risk_labels <- c("< 0.67", "0.67-0.83", "0.83-0.95", "0.95-1.05", "1.05-1.2", "1.2-1.5", "> 1.5")
+risk_class  <- function(x) cut(x, risk_breaks, risk_labels)
+risk_fill   <- scale_fill_brewer(palette = "RdBu", direction = -1, drop = FALSE,
+                                 name = "Relative risk")
+
+exc_cols  <- c("Probably lower (< 0.2)"  = "#2c7bb6",
+               "Uncertain (0.2-0.8)"     = "grey90",
+               "Probably higher (> 0.8)" = "#d7191c")
+exc_class <- function(p) cut(p, c(0, 0.2, 0.8, 1), labels = names(exc_cols),
+                             include.lowest = TRUE)
+
+map_panels <- function(values, panels, i, classes = risk_class, fill = risk_fill) {
+  m <- do.call(rbind, lapply(seq_along(values), function(j)
+         mutate(pa, value = values[[j]], panel = panels[j])))
+  m$panel <- factor(m$panel, panels)
+  ggplot(m) +
+    geom_sf(aes(fill = classes(value)), colour = "white", linewidth = 0.15) +
+    geom_sf(data = pa[i, ], fill = NA, colour = "black", linewidth = 0.9) +   # chosen county
+    facet_wrap(~ panel, ncol = 2) +
+    fill +
+    theme_void(base_size = 13)
+}
+
+knob <- function(id, label, value, min, max, step, colour = "#2c7bb6") {
+  knobInput(id, label, value = value, min = min, max = max, step = step,
+            angleOffset = -125, angleArc = 250, thickness = 0.3, lineCap = "round",
+            fgColor = colour, inputColor = colour, width = "130px", height = "130px")
+}
+
+play_knob <- function(button, id, values, interval) {   # a Play button turns a knob
+  on <- reactiveVal(FALSE)
+  observeEvent(input[[button]], {
+    on(!on())
+    if (on() && input[[id]] >= max(values)) updateKnobInput(session, id, value = values[1])
+    updateActionButton(session, button, label = if (on()) "\u275a\u275a Pause" else "\u25b6 Play")
+  })
+  observe({
+    req(on())
+    invalidateLater(interval)
+    isolate({
+      nxt <- values[values > input[[id]]][1]
+      if (is.na(nxt)) {
+        on(FALSE)
+        updateActionButton(session, button, label = "\u25b6 Play")
+      } else updateKnobInput(session, id, value = nxt)
+    })
+  })
+}
+
+clicked_county <- function(cl) {                   # county under a mouse click
+  if (is.null(cl)) return(NULL)
+  hit <- st_intersects(st_sfc(st_point(c(cl$x, cl$y)), crs = st_crs(pa)), pa)[[1]]
+  if (length(hit) == 0) NULL else pa$county[hit[1]]
+}
+```
+
+## The question of the day
+
+When we fit BYM or BYM2, INLA has to deal with **settings of the model that
+nobody knows**, for example how much counties differ. INLA does not pick one
+value for them. It **tries several values, gives each one a weight, and
+averages the results**.
+
+Today we do exactly this by hand, with a model that has **one** unknown
+setting, called $k$. Then we ask: how many values does INLA need to try?
+
+The plan:
+
+- **Step 0.** Recall what we know: the SIR and borrowing from the state.
+- **Step 1.** Meet the unknown setting, $k$, and see where last week's value came from.
+- **Step 2.** Move $k$ by hand and watch every county change.
+- **Step 3.** Measure how plausible each value of $k$ is.
+- **Step 4.** Try several values of $k$ and give each a weight.
+- **Step 5.** Average the curves, and find how many values we need.
+- **Step 6.** See the result on the map.
+- **Step 7.** BYM2 has two knobs instead of one.
+- **Step 8.** Turn the two BYM2 knobs and watch the maps.
+- **Step 9.** Try several values of both knobs: how many do we need?
+- **Step 10.** The same in R-INLA.
+
+## Step 0. What we already know
+
+<div class="step">
+**The SIR.** For each county, $\text{SIR} = O / E$: observed cases divided by
+expected cases. Potter County has $O$ = 22 and $E$ = 16, so its SIR is 1.37.
+
+**The problem.** Potter is small. One or two cases more or less would move its
+SIR a lot, so we do not fully trust 1.37.
+
+**The fix: borrow from the state.** We pull Potter's estimate toward the state
+average, 1. Like a restaurant with two reviews, whose 5 stars we pull toward a
+typical 4 stars.
+</div>
+
+## Step 1. The unknown setting, $k$
+
+### What $k$ means
+
+<div class="step">
+Imagine the state average as an **imaginary extra county** with $k$ expected
+cases and exactly $k$ observed cases (so its SIR is 1). We pool each real
+county with this imaginary county:
+
+$$
+\text{best guess} \;=\; \frac{O + k}{E + k}
+$$
+
+For Potter, with $k$ = 108:
+$\dfrac{22 + 108}{16 + 108} = `r sprintf("%.2f", (22 + 108) / (E[ip] + 108))`$.
+
+- Potter's own data count for 16 of the 124 expected cases (13%).
+- The state average counts for 108 of them (87%).
+
+So we say the state average is **worth $k$ expected cases**:
+
+- **large $k$**: the state counts a lot, every county is pulled close to 1;
+- **small $k$**: each county mostly keeps its own SIR.
+</div>
+
+### Where last week's $k \approx 108$ came from
+
+<div class="step">
+`EBest()` chose $k$ from the data in three moves:
+
+1. **Measure how much the 67 SIRs vary.**
+2. **Measure how much they would vary by chance alone**, if every county had
+   the state's risk. Small counties make this large.
+3. **Subtract.** What is left is the **real** difference between counties.
+
+If real differences are small, the state average is a good guess for every
+county, so it is worth a lot: $k$ is large. Precisely, $k$ = 1 / (real
+variance).
+</div>
+
+```{r where-k}
+total  <- sum(E * (O / E - 1)^2) / sum(E)          # 1. how much the SIRs vary
+chance <- 1 / mean(E)                              # 2. ... by chance alone
+real   <- total - chance                           # 3. real differences
+round(c(total = total, chance = chance, real = real, k = 1 / real), 4)
+with(attr(spdep::EBest(O, E), "parameters"), b / a)   # same number from EBest()
+```
+
+```{r k-eb, include = FALSE}
+k_eb <- 1 / real
+```
+
+**Result:** $k \approx$ `r round(k_eb)`. But this number is itself an estimate
+from only 67 counties. **We do not know $k$ exactly.** That is the problem the
+rest of the lecture solves.
+
+## Step 2. Move $k$ and watch what happens
+
+<div class="step">
+**What we do.** We fix $k$ at one value and compute every county's answer.
+
+**What you see.**
+
+- **Left:** the chosen county's **posterior curve**: which relative risks are
+  plausible. The green area is the **95% interval**: the true risk is inside
+  it with 95% probability. Red dotted: the county's SIR. Black dashed: the
+  state, 1.
+- **Right:** the same numbers in a table.
+- **Maps, below:** for all 67 counties, the raw SIR, the **low end** of the
+  95% interval, the **best guess**, and the **high end** of the 95% interval.
+  (A curve never truly stops, so the ends of the 95% interval play the role of
+  "minimum" and "maximum".)
+
+**Click any county on a map** to choose it.
+</div>
+
+**Predict first.** If you move $k$ to the right (state worth more), does
+Potter move toward its SIR, 1.37, or toward 1?
+
+```{r step2, echo = FALSE}
+fluidRow(
+  column(4, selectInput("county1", "County", counties, selected = "potter"),
+            helpText("Or click a county on a map.")),
+  column(4, knob("k1", "k: the state is worth k cases", 5 * round(k_eb / 5) - 2,
+                 3, 598, 5)),
+  column(4, br(), br(), actionButton("play_k1", "\u25b6 Play"),
+            helpText("Turns the k knob from 3 to 598."))
+)
+play_knob("play_k1", "k1", seq(3, 598, by = 5), 600)
+fluidRow(
+  column(7, plotOutput("curve1", height = "290px")),
+  column(5, br(), br(), tableOutput("table1"))
+)
+plotOutput("maps1", height = "470px", click = "click1")
+
+observeEvent(input$click1, {
+  cty <- clicked_county(input$click1)
+  if (!is.null(cty)) updateSelectInput(session, "county1", selected = cty)
+})
+
+i1 <- reactive(match(input$county1, d$county))
+
+output$curve1 <- renderPlot({
+  i <- i1(); k <- input$k1
+  a <- k + O[i]; b <- k + E[i]
+  ci  <- qgamma(c(0.025, 0.975), a, b)
+  cur <- data.frame(rr = rr, dens = dgamma(rr, a, b))
+  ggplot(cur, aes(rr, dens)) +
+    geom_area(data = subset(cur, rr >= ci[1] & rr <= ci[2]), fill = "darkgreen", alpha = 0.25) +
+    geom_line(colour = "darkgreen", linewidth = 1.2) +
+    geom_vline(xintercept = 1, linetype = 2) +
+    geom_vline(xintercept = d$SIR[i], colour = "red", linetype = 3, linewidth = 1) +
+    labs(title = paste0(tc(d$county[i]), " with k = ", k),
+         x = "Relative risk", y = NULL) +
+    theme_classic(base_size = 13)
+})
+
+output$table1 <- renderTable({
+  i <- i1(); k <- input$k1
+  a <- k + O[i]; b <- k + E[i]
+  data.frame(
+    ` ` = c("Observed cases, O", "Expected cases, E", "SIR = O / E",
+            "Weight on its own data, E / (E + k)", "Best guess, (O + k) / (E + k)",
+            "Low end of 95% interval", "High end of 95% interval"),
+    Value = c(sprintf("%d", O[i]), sprintf("%.1f", E[i]), sprintf("%.2f", d$SIR[i]),
+              sprintf("%.0f%%", 100 * E[i] / (E[i] + k)), sprintf("%.2f", a / b),
+              sprintf("%.2f", qgamma(0.025, a, b)), sprintf("%.2f", qgamma(0.975, a, b))),
+    check.names = FALSE)
+})
+
+output$maps1 <- renderPlot({
+  k <- input$k1; a <- k + O; b <- k + E
+  map_panels(list(d$SIR, qgamma(0.025, a, b), a / b, qgamma(0.975, a, b)),
+             c("Raw SIR (no borrowing)", "Low end of the 95% interval",
+               "Best guess", "High end of the 95% interval"),
+             i1())
+})
+```
+
+<div class="step">
+**Try it.**
+
+1. Press **▶ Play** next to the $k$ knob, or turn the knob yourself.
+2. Set $k$ = 3. Why does the best-guess map look almost like the raw SIR map?
+3. Choose Sullivan (small, near the top of the menu), then Philadelphia (the
+   largest). Whose numbers change more when you move $k$?
+
+**What you should see.**
+
+- As $k$ grows, the best-guess map fades toward white: every county is pulled
+  to 1.
+- The low-end and high-end maps move closer together: we become more sure.
+- Small counties move a lot; Philadelphia barely moves.
+
+**Conclusion of Step 2.** The answer for every county depends on $k$. So we
+must decide **which values of $k$ to believe**.
+</div>
+
+## Step 3. How plausible is each value of $k$?
+
+<div class="step">
+**What we do.** For one value of $k$, we ask: *if the state average were
+really worth $k$ expected cases, how likely would the 67 counts we observed
+be?* R answers in one line with `dnbinom()`.
+
+**How to read the numbers.** They are on a log scale and always negative.
+**Higher (closer to zero) means more plausible.**
+</div>
+
+```{r plausibility}
+plausibility <- function(k) {
+  sapply(k, function(kk) sum(dnbinom(O, size = kk, mu = E, log = TRUE)))
+}
+plausibility(c(20, 100, 400))                      # higher = more plausible
+```
+
+```{r hill-data, include = FALSE}
+hill <- data.frame(k = 1:600)
+hill$height <- exp(plausibility(hill$k) - max(plausibility(hill$k)))   # 1 at the top
+k_top <- hill$k[which.max(hill$height)]
+k_ok  <- range(hill$k[hill$height > 0.1])
+```
+
+So $k$ = 100 (`r round(plausibility(100), 1)`) is more plausible than $k$ =
+20 (`r round(plausibility(20), 1)`) or $k$ = 400
+(`r round(plausibility(400), 1)`).
+
+Doing this for every $k$ from 1 to 600 draws a **hill** (rescaled so the top
+is 1):
+
+```{r hill-plot, echo = FALSE, fig.width = 8, fig.height = 3.6}
+ggplot(hill, aes(k, height)) +
+  geom_area(data = subset(hill, k >= k_ok[1] & k <= k_ok[2]), fill = "purple", alpha = 0.25) +
+  geom_line(colour = "purple", linewidth = 1.2) +
+  geom_vline(xintercept = k_eb, linetype = 2) +
+  annotate("text", x = k_eb, y = 1.05, label = paste("EBest:", round(k_eb)), hjust = -0.1) +
+  labs(x = "k, what the state average is worth (expected cases)",
+       y = "Plausibility") +
+  theme_classic(base_size = 13)
+```
+
+<div class="step">
+**What you should see.**
+
+- The top of the hill is at $k$ = `r k_top`. EBest's `r round(k_eb)` (dashed)
+  is right next to it: **EBest took the top of the hill and ignored the
+  rest.**
+- But the hill is wide. Every $k$ in the shaded part, from about
+  `r k_ok[1]` to `r k_ok[2]`, is still reasonably plausible.
+
+**Conclusion of Step 3.** Betting everything on one value is overconfident.
+Better: use **many** values of $k$, and let the more plausible ones count
+more.
+</div>
+
+## Step 4. Try several values of $k$ and give each a weight
+
+<div class="step">
+**What we do.**
+
+1. Choose how many values of $k$ to try, spread evenly between 10 and 600.
+2. Compute the plausibility of each value (Step 3).
+3. Turn plausibilities into **weights** that add up to 1. The most plausible
+   value gets the largest weight.
+</div>
+
+```{r try-values}
+try_values <- function(n_values, k_min = 10, k_max = 600) {
+  k <- seq(k_min, k_max, length.out = n_values)    # 1. the values we try
+  h <- plausibility(k)                             # 2. their plausibility
+  w <- exp(h - max(h)) / sum(exp(h - max(h)))      # 3. weights, add up to 1
+  data.frame(k = k, plausibility = h, weight = w)
+}
+
+round(try_values(4), 3)                            # example: 4 values
+```
+
+```{r ex4, include = FALSE}
+ex4 <- try_values(4)
+```
+
+**How to read this table.** We tried 4 values: $k$ =
+`r paste(round(ex4$k), collapse = ", ")`. The value $k$ = `r round(ex4$k[2])`
+is the most plausible of the four, so it gets
+`r round(100 * ex4$weight[2])`% of the weight. The value $k$ = 10 is very
+implausible and gets almost nothing.
+
+## Step 5. Average the curves, and find how many values we need
+
+<div class="step">
+**What we do.** Each value of $k$ gives Potter its own curve (Step 2). The
+final curve is the **weighted average** of these curves. With the 4 values
+above:
+
+final curve = `r sprintf("%.3f", ex4$weight[1])` × (curve with $k$ = 10) +
+`r sprintf("%.3f", ex4$weight[2])` × (curve with $k$ = `r round(ex4$k[2])`) +
+`r sprintf("%.3f", ex4$weight[3])` × (curve with $k$ = `r round(ex4$k[3])`) +
+`r sprintf("%.3f", ex4$weight[4])` × (curve with $k$ = 600).
+
+**The "full answer".** To know the right answer, we also do the same thing with
+3,000 values of $k$ from 1 to 3,000. That is so many that adding more changes
+nothing. It is drawn dashed in the plots.
+
+**What you see.**
+
+- **Top left:** the values of $k$ tried (purple sticks) and their weights.
+  The light purple shape behind them is the hill from Step 3.
+- **Top right:** the thin green curves are the weighted curves, one per value
+  of $k$. The thick green curve is their sum, the final curve. Dashed: the full
+  answer.
+- **Bottom left:** the numbers, compared with the full answer.
+- **Bottom right:** how the spread (width) of the final curve changes with the
+  number of values.
+</div>
+
+**Predict first.** How many values will you need before the green curve sits on
+the dashed one? Write down a number, then press **▶ Play**.
+
+```{r step5, echo = FALSE}
+fluidRow(
+  column(3, knob("n", "Values of k tried", 2, 2, 50, 1, "#1b7837"),
+            actionButton("play_n", "\u25b6 Play")),
+  column(3, knob("kmin", "Smallest k", 10, 1, 500, 1, "#7f7f7f")),
+  column(3, knob("kmax", "Largest k", 600, 50, 1000, 10, "#7f7f7f")),
+  column(3, selectInput("county2", "County", counties, selected = "potter"),
+            checkboxInput("parts", "Show each weighted curve", TRUE))
+)
+play_knob("play_n", "n", 2:50, 1000)
+fluidRow(
+  column(6, plotOutput("weights", height = "310px")),
+  column(6, plotOutput("average", height = "310px"))
+)
+fluidRow(
+  column(6, br(), tableOutput("numbers")),
+  column(6, plotOutput("converge", height = "230px"))
+)
+
+full <- try_values(3000, 1, 3000)                  # the full answer
+
+mix_summary <- function(t, i) {                    # weighted average of the curves
+  a <- t$k + O[i]; b <- t$k + E[i]
+  best <- sum(t$weight * a / b)
+  c(`best guess` = best,
+    spread       = sqrt(sum(t$weight * (a / b^2 + (a / b)^2)) - best^2),
+    `P(RR > 1)`  = sum(t$weight * pgamma(1, a, b, lower.tail = FALSE)))
+}
+
+tried <- reactive({
+  req(input$kmax > input$kmin)
+  try_values(input$n, input$kmin, input$kmax)
+})
+i2    <- reactive(match(input$county2, d$county))
+
+output$weights <- renderPlot({
+  t  <- tried()
+  hs <- subset(hill, k >= input$kmin & k <= input$kmax)
+  hs$height <- hs$height * max(t$weight)           # hill scaled to the tallest weight
+  ggplot(t, aes(k, weight)) +
+    geom_area(data = hs, aes(k, height), fill = "purple", alpha = 0.12) +
+    geom_segment(aes(xend = k, yend = 0), colour = "purple", linewidth = 1) +
+    geom_point(colour = "purple", size = 3) +
+    coord_cartesian(xlim = c(0, 1000)) +
+    labs(title = paste(input$n, "values of k and their weights"), x = "k", y = "Weight") +
+    theme_classic(base_size = 13)
+})
+
+output$average <- renderPlot({
+  t <- tried(); i <- i2()
+  parts <- do.call(rbind, lapply(seq_len(nrow(t)), function(j)
+    data.frame(j = j, rr = rr, dens = t$weight[j] * dgamma(rr, t$k[j] + O[i], t$k[j] + E[i]))))
+  avg <- aggregate(dens ~ rr, parts, sum)
+  ref <- data.frame(rr = rr, dens = sapply(rr, function(x)
+           sum(full$weight * dgamma(x, full$k + O[i], full$k + E[i]))))
+  p <- ggplot(avg, aes(rr, dens)) + geom_vline(xintercept = 1, linetype = 2)
+  if (input$parts) p <- p + geom_line(data = parts, aes(group = j), colour = "darkgreen",
+                                      alpha = 0.35, linewidth = 0.5)
+  p +
+    geom_line(data = ref, colour = "grey40", linetype = 2, linewidth = 1) +
+    geom_line(colour = "darkgreen", linewidth = 1.4) +
+    labs(title = "Final curve (green) vs full answer (dashed)",
+         x = paste("Relative risk,", tc(d$county[i])), y = NULL) +
+    theme_classic(base_size = 13)
+})
+
+output$numbers <- renderTable({
+  i <- i2()
+  out <- rbind(mix_summary(tried(), i), mix_summary(full, i))
+  data.frame(` ` = c(paste("With", input$n, "values"), "Full answer"), out,
+             check.names = FALSE)
+}, digits = 3)
+
+output$converge <- renderPlot({
+  i  <- i2()
+  cv <- data.frame(n = 2:50, spread = sapply(2:50, function(n)
+          mix_summary(try_values(n, input$kmin, input$kmax), i)["spread"]))
+  ggplot(cv, aes(n, spread)) +
+    geom_hline(yintercept = mix_summary(full, i)["spread"], linetype = 2, colour = "grey40") +
+    geom_line(colour = "darkgreen") +
+    geom_point(data = subset(cv, n == input$n), size = 4, colour = "darkgreen") +
+    labs(title = "Spread of the final curve", x = "Number of values tried", y = "Spread") +
+    theme_classic(base_size = 12)
+})
+```
+
+<div class="step">
+**What you should see when you press ▶ Play.**
+
+1. **2 to 5 values:** one value of $k$ takes almost all the weight, and it is
+   not the top of the hill. The green curve is too narrow and too close to 1.
+2. **About 8 to 10 values:** the green curve reaches the dashed curve. The
+   spread stops changing (bottom right).
+3. **25 to 50 values:** nothing changes any more. We could keep adding values
+   forever, but it would only cost time.
+
+**Try it.**
+
+- Untick *Show each weighted curve*, then tick it again: the thick curve is
+  the sum of the thin ones.
+- Turn the *Largest k* knob down to 150, then turn the number of values to
+  50. The green curve never reaches the dashed one: **the range matters as
+  much as the number of values.**
+- Choose Philadelphia. Does it care how many values we try? Why not?
+</div>
+
+## Step 6. The result on the map
+
+<div class="step">
+**What we do.** The same calculation for all 67 counties at once. Left: with
+the number of values on the knob. Right: the full answer.
+
+**What you can map.**
+
+- **P(RR > 1):** the probability that the county's risk is above the state's.
+  Red: probably higher. Blue: probably lower. Grey: we cannot tell.
+- **Low end, best guess, high end** of the 95% interval, as in Step 2.
+
+Press **▶ Play** to animate. This knob is the same as in Step 5. Click a county
+to select it in Step 5.
+</div>
+
+**Predict first.** With only 2 values, will the left map show more red and blue
+counties than the full answer, or fewer?
+
+```{r step6, echo = FALSE}
+fluidRow(
+  column(4, knob("n3", "Values of k tried", 2, 2, 50, 1, "#1b7837"),
+            actionButton("play_n3", "\u25b6 Play")),
+  column(8, radioButtons("map_what", "What to map", inline = TRUE,
+                         choices = c("P(RR > 1)" = "p", "Low end (2.5%)" = "low",
+                                     "Best guess" = "best", "High end (97.5%)" = "high")),
+            textOutput("changed"))
+)
+plotOutput("maps", height = "330px", click = "click2")
+
+play_knob("play_n3", "n3", 2:50, 1200)
+observeEvent(input$n,  if (!identical(input$n, input$n3)) updateKnobInput(session, "n3", value = input$n))
+observeEvent(input$n3, if (!identical(input$n3, input$n)) updateKnobInput(session, "n",  value = input$n3))
+observeEvent(input$click2, {
+  cty <- clicked_county(input$click2)
+  if (!is.null(cty)) updateSelectInput(session, "county2", selected = cty)
+})
+
+mix_all <- function(t) {                           # every county, final curves
+  t <- t[t$weight > 1e-10 * max(t$weight), ]       # drop values with no weight
+  w <- t$weight
+  do.call(rbind, lapply(seq_len(nrow(d)), function(i) {
+    a <- t$k + O[i]; b <- t$k + E[i]
+    cdf <- function(x) sum(w * pgamma(x, a, b))
+    data.frame(best = sum(w * a / b),
+               low  = uniroot(function(x) cdf(x) - 0.025, c(0.05, 5))$root,
+               high = uniroot(function(x) cdf(x) - 0.975, c(0.05, 5))$root,
+               p    = sum(w * pgamma(1, a, b, lower.tail = FALSE)))
+  }))
+}
+
+now_all  <- reactive(mix_all(tried()))
+full_all <- mix_all(full)
+map_classes <- reactive(if (input$map_what == "p") exc_class else risk_class)
+
+output$maps <- renderPlot({
+  what <- input$map_what
+  fill <- if (what == "p") scale_fill_manual(values = exc_cols, drop = FALSE, name = NULL)
+          else risk_fill
+  map_panels(list(now_all()[[what]], full_all[[what]]),
+             c(paste("With", input$n, "values"), "Full answer"),
+             i2(), classes = map_classes(), fill = fill) +
+    theme(legend.position = "bottom")
+})
+
+output$changed <- renderText({
+  cl <- map_classes()
+  n_diff <- sum(cl(now_all()[[input$map_what]]) != cl(full_all[[input$map_what]]))
+  paste0(n_diff, " of 67 counties have a different colour than in the full answer.")
+})
+```
+
+<div class="step">
+**What you should see.** With 2 values, the left map is mostly grey: real
+high-risk and low-risk counties are hidden, because one bad value of $k$ pulled
+everybody toward 1. As you add values, counties turn red or blue, and by about
+8 to 10 values both maps agree.
+</div>
+
+## Step 7. BYM2 has two knobs
+
+<div class="step">
+**What changes.** In Steps 1 to 6, each county borrowed from the **state**,
+and one knob, $k$, said how much. BYM2 lets each county also borrow from its
+**neighbours**. It has two knobs:
+
+- **$\sigma$ (sigma): how much counties really differ.** It does the job of
+  $k$, in reverse. Small $\sigma$: counties are alike, so every county is
+  pulled to 1 (like a large $k$). Large $\sigma$: each county keeps its own
+  SIR (like a small $k$). Roughly, $\sigma \approx 1/\sqrt{k}$, so our
+  $k$ = 108 is $\sigma \approx$ `r sprintf("%.2f", 1 / sqrt(k_eb))`.
+- **$\phi$ (phi): where a county borrows from.** $\phi$ = 0: only from the
+  state, as in Steps 1 to 6. $\phi$ = 1: only from its neighbours. In
+  between: a mix.
+
+**Two parts.** BYM2 splits each county's risk into two parts that multiply:
+
+$$
+\text{best guess} \;=\; \text{neighbours part} \;\times\; \text{own part}
+$$
+
+- the **neighbours part** is shared with the counties around it;
+- the **own part** is what is special about this county alone.
+
+$\phi$ decides how much of the variation goes into the neighbours part.
+</div>
+
+```{r bym2-engine, include = FALSE}
+nb    <- poly2nb(pa, queen = TRUE)                 # queen neighbours
+W     <- nb2mat(nb, style = "B")                   # 1 = neighbours
+Qplus <- MASS::ginv(diag(rowSums(W)) - W)          # neighbours pattern (ICAR)
+Qplus <- Qplus / exp(mean(log(diag(Qplus))))       # scaled, as in BYM2
+
+bym2 <- function(sigma, phi) {                     # one value of both knobs
+  phi   <- min(phi, 0.99)                          # phi = 1 exactly cannot be inverted
+  Sigma <- sigma^2 * ((1 - phi) * diag(n) + phi * Qplus)
+  P     <- solve(Sigma)
+  b     <- rep(0, n)                               # log relative risks
+  for (it in 1:30) {                               # climb to the top
+    mu   <- E * exp(b)
+    step <- drop(solve(P + diag(mu), O - mu - P %*% b))
+    b    <- b + step
+    if (max(abs(step)) < 1e-8) break
+  }
+  mu <- E * exp(b)
+  H  <- P + diag(mu)
+  Pb <- drop(P %*% b)
+  list(m   = b,                                    # bell centres (log scale)
+       s   = sqrt(diag(solve(H))),                 # bell widths (log scale)
+       nbr = sigma^2 * phi * drop(Qplus %*% Pb),   # neighbours part (log scale)
+       own = sigma^2 * (1 - phi) * Pb,             # own part (log scale)
+       height = sum(O * b - mu) - 0.5 * sum(b * Pb) -
+                0.5 * as.numeric(determinant(Sigma)$modulus) -
+                0.5 * as.numeric(determinant(H)$modulus) +
+                dexp(sigma, rate = -log(0.01), log = TRUE))   # PC prior on sigma; phi flat
+}
+
+hill2 <- expand.grid(sigma = seq(0.01, 0.40, length.out = 40),   # the hill, for the plots
+                     phi   = (1:30 - 0.5) / 30)
+hill2$h <- sapply(seq_len(nrow(hill2)), function(j) bym2(hill2$sigma[j], hill2$phi[j])$height)
+top2  <- optim(unlist(hill2[which.max(hill2$h), 1:2]),
+               function(x) -bym2(x[1], x[2])$height,
+               method = "L-BFGS-B", lower = c(0.01, 0.001), upper = c(0.4, 0.99))
+top_h <- -top2$value
+hill2$height <- exp(hill2$h - top_h)               # 1 at the top
+s_ok  <- range(hill2$sigma[hill2$height > 0.1])    # plausible sigma
+p_ok  <- range(hill2$phi[hill2$height > 0.1])      # plausible phi
+
+hill_plot <- function() {
+  ggplot(hill2, aes(phi, sigma)) +
+    geom_contour_filled(aes(z = height), breaks = c(0.0025, 0.05, 0.2, 0.4, 0.6, 0.8, 1.01)) +
+    scale_fill_brewer(palette = "Purples", guide = "none") +
+    coord_cartesian(expand = FALSE, xlim = c(0, 1), ylim = c(0.01, 0.40)) +
+    labs(x = "φ, share from neighbours", y = "σ, how much counties differ") +
+    theme_classic(base_size = 13)
+}
+```
+
+## Step 8. Turn the two knobs
+
+<div class="step">
+**What we do.** Fix both knobs and compute every county's answer, as in
+Step 2.
+
+**What you see.**
+
+- **Left:** the chosen county's curve. Green area: the 95% interval. Red
+  dotted: its SIR. Black dashed: the state, 1.
+- **Middle:** its numbers. Check that best guess = neighbours part × own part.
+- **Right:** the **hill** for two knobs, seen from above, like a map of a
+  mountain. Darker purple = more plausible. The black dot is where your knobs
+  are.
+- **Maps:** raw SIR, best guess, low end and high end of the 95% interval,
+  then the neighbours part and the own part.
+
+Click a county on a map to choose it.
+</div>
+
+**Predict first.** Set $\sigma$ = 0.10 and turn $\phi$ from 0 to 1. Which map
+fades to white at $\phi$ = 0: the neighbours part or the own part? And at
+$\phi$ = 1?
+
+```{r step8, echo = FALSE}
+fluidRow(
+  column(4, selectInput("county8", "County", counties, selected = "potter"),
+            helpText("Or click a county on a map.")),
+  column(4, knob("sigma", "σ: how much counties differ", 0.10, 0.01, 0.40, 0.01, "#6a3d9a")),
+  column(4, knob("phi", "φ: share from neighbours", 0.50, 0, 1, 0.05, "#e66101"))
+)
+fluidRow(
+  column(4, plotOutput("curve8", height = "270px")),
+  column(3, tableOutput("table8")),
+  column(5, plotOutput("hill8", height = "270px"))
+)
+plotOutput("maps8", height = "640px", click = "click8")
+
+fit8 <- reactive(bym2(input$sigma, input$phi))
+i8   <- reactive(match(input$county8, d$county))
+observeEvent(input$click8, {
+  cty <- clicked_county(input$click8)
+  if (!is.null(cty)) updateSelectInput(session, "county8", selected = cty)
+})
+
+output$curve8 <- renderPlot({
+  f <- fit8(); i <- i8()
+  m <- f$m[i]; s <- f$s[i]
+  ci  <- exp(m + c(-1.96, 1.96) * s)
+  cur <- data.frame(rr = rr, dens = dlnorm(rr, m, s))
+  ggplot(cur, aes(rr, dens)) +
+    geom_area(data = subset(cur, rr >= ci[1] & rr <= ci[2]), fill = "darkgreen", alpha = 0.25) +
+    geom_line(colour = "darkgreen", linewidth = 1.2) +
+    geom_vline(xintercept = 1, linetype = 2) +
+    geom_vline(xintercept = d$SIR[i], colour = "red", linetype = 3, linewidth = 1) +
+    labs(title = sprintf("%s, σ = %.2f, φ = %.2f", tc(d$county[i]), input$sigma, input$phi),
+         x = "Relative risk", y = NULL) +
+    theme_classic(base_size = 13)
+})
+
+output$table8 <- renderTable({
+  f <- fit8(); i <- i8()
+  data.frame(
+    ` ` = c("SIR", "Best guess", "Low end of 95% interval", "High end of 95% interval",
+            "Neighbours part", "Own part", "Neighbours × own"),
+    Value = sprintf("%.2f", c(d$SIR[i], exp(f$m[i]), exp(f$m[i] - 1.96 * f$s[i]),
+                              exp(f$m[i] + 1.96 * f$s[i]), exp(f$nbr[i]), exp(f$own[i]),
+                              exp(f$nbr[i]) * exp(f$own[i]))),
+    check.names = FALSE)
+})
+
+output$hill8 <- renderPlot({
+  hill_plot() +
+    annotate("point", x = input$phi, y = input$sigma, size = 5) +
+    labs(title = sprintf("How plausible? %.2f of the top",
+                         exp(fit8()$height - top_h)))
+})
+
+output$maps8 <- renderPlot({
+  f <- fit8()
+  map_panels(list(d$SIR, exp(f$m), exp(f$m - 1.96 * f$s), exp(f$m + 1.96 * f$s),
+                  exp(f$nbr), exp(f$own)),
+             c("Raw SIR (no borrowing)", "Best guess",
+               "Low end of the 95% interval", "High end of the 95% interval",
+               "Neighbours part", "Own part"),
+             i8())
+})
+```
+
+<div class="step">
+**Try it.**
+
+1. Set $\sigma$ = 0.10 and turn $\phi$ from 0 to 1. Watch the last two maps.
+2. Turn $\sigma$ down to 0.01. What does the best-guess map look like? Which
+   value of $k$ does this remind you of?
+3. Turn $\sigma$ up to 0.40. What does the best-guess map look like now?
+4. Move the black dot to the darkest part of the hill. Which knob does the
+   hill pin down well, and which one does it not?
+
+**What you should see.**
+
+- $\phi$ = 0: the neighbours part is white, every county borrows from the state
+  only, as in Steps 1 to 6. $\phi$ = 1: the own part is white, every county is
+  pulled toward its neighbours.
+- Small $\sigma$: every county is pulled to 1, like a large $k$. Large
+  $\sigma$: the best guess looks like the raw SIR, like a small $k$.
+- The hill is **narrow along $\sigma$** (plausible from about
+  `r sprintf("%.2f", s_ok[1])` to `r sprintf("%.2f", s_ok[2])`) but **wide
+  along $\phi$** (about `r sprintf("%.2f", p_ok[1])` to
+  `r sprintf("%.2f", p_ok[2])`): 67 counties tell us well how much counties
+  differ, but not how much of that is spatial.
+
+**Conclusion of Step 8.** As with $k$, the answer depends on the knobs, and the
+hill says which knob values to believe. So we do what we did for $k$: try
+several values, weight them, average.
+</div>
+
+## Step 9. Try several values of both knobs
+
+<div class="step">
+**What we do.** Steps 4 and 5 again, with two knobs.
+
+1. Choose $K$, the number of values **per knob**. We try $K$ values of
+   $\sigma$ (between 0.02 and 0.25) and $K$ values of $\phi$ (between 0 and 1).
+   Every value of $\sigma$ is combined with every value of $\phi$: a grid of
+   $K \times K$ points.
+2. At each point, compute every county's curve and the height of the hill.
+3. Weights = heights, scaled to add up to 1. Average the curves.
+
+**The "full answer"** uses 80 values of $\sigma$ × 30 values of $\phi$ = 2,400
+points.
+
+**What you see.**
+
+- **Top left:** the hill and the $K \times K$ points. Bigger dot = bigger
+  weight.
+- **Top right:** the chosen county's final curve (green) and the full answer
+  (dashed).
+- **Middle:** the maps, with $K$ values per knob and the full answer.
+- **Bottom:** how far the widest error, over all 67 counties, is from the full
+  answer, for each $K$.
+</div>
+
+**Predict first.** With one knob, about 8 to 10 values were enough. With two
+knobs, how many values per knob do we need? How many points is that in total?
+
+```{r step9, echo = FALSE}
+fluidRow(
+  column(3, knob("K", "Values per knob, K", 2, 2, 35, 1, "#1b7837"),
+            actionButton("play_K", "▶ Play")),
+  column(4, selectInput("county9", "County", counties, selected = "potter"),
+            radioButtons("map9", "What to map",
+                         choices = c("P(RR > 1)" = "p", "Low end (2.5%)" = "low",
+                                     "Best guess" = "best", "High end (97.5%)" = "high"))),
+  column(5, br(), tableOutput("table9"))
+)
+fluidRow(
+  column(6, plotOutput("grid9", height = "300px")),
+  column(6, plotOutput("curve9", height = "300px"))
+)
+textOutput("changed9")
+plotOutput("maps9", height = "330px", click = "click9")
+plotOutput("err9", height = "260px")
+
+play_knob("play_K", "K", c(2:10, 12, 15, 20, 25, 30, 35), 1500)
+observeEvent(input$click9, {
+  cty <- clicked_county(input$click9)
+  if (!is.null(cty)) updateSelectInput(session, "county9", selected = cty)
+})
+
+grid_fit <- function(sigmas, phis) {               # every combination of the values
+  G    <- expand.grid(sigma = sigmas, phi = phis)
+  fits <- lapply(seq_len(nrow(G)), function(j) bym2(G$sigma[j], G$phi[j]))
+  h    <- sapply(fits, function(f) f$height)
+  G$weight <- exp(h - max(h)) / sum(exp(h - max(h)))
+  list(G = G, M = sapply(fits, function(f) f$m), S = sapply(fits, function(f) f$s))
+}
+
+summarise_all <- function(g) {                     # final curve of every county
+  keep <- g$G$weight > 1e-10 * max(g$G$weight)
+  w <- g$G$weight[keep]; M <- g$M[, keep, drop = FALSE]; S <- g$S[, keep, drop = FALSE]
+  do.call(rbind, lapply(seq_len(n), function(i) {
+    cdf <- function(x) sum(w * pnorm(log(x), M[i, ], S[i, ]))
+    q   <- function(p) uniroot(function(x) cdf(x) - p, c(0.2, 5))$root
+    mn  <- sum(w * exp(M[i, ] + S[i, ]^2 / 2))
+    data.frame(best = q(0.5), low = q(0.025), high = q(0.975),
+               spread = sqrt(sum(w * exp(2 * M[i, ] + 2 * S[i, ]^2)) - mn^2),
+               p = sum(w * pnorm(0, M[i, ], S[i, ], lower.tail = FALSE)))
+  }))
+}
+
+full9 <- grid_fit(seq(0.02, 0.25, length.out = 80), (1:30 - 0.5) / 30)
+full9$sum <- summarise_all(full9)
+
+cache9 <- new.env()                                # each K is computed once
+get_K <- function(K) {
+  key <- as.character(K)
+  if (is.null(cache9[[key]])) {
+    g <- grid_fit(0.02 + (1:K - 0.5) * 0.23 / K,   # K values of sigma
+                  (1:K - 0.5) / K)                 # K values of phi
+    g$sum <- summarise_all(g)
+    cache9[[key]] <- g
+  }
+  cache9[[key]]
+}
+
+err_K <- 2:12                                      # the error plot
+err9  <- data.frame(K = err_K, error = sapply(err_K, function(K)
+           100 * max(abs(get_K(K)$sum$spread / full9$sum$spread - 1))))
+
+g9 <- reactive(get_K(input$K))
+i9 <- reactive(match(input$county9, d$county))
+
+output$grid9 <- renderPlot({
+  G <- g9()$G
+  hill_plot() +
+    annotate("rect", xmin = 0, xmax = 1, ymin = 0.02, ymax = 0.25, fill = NA,
+             colour = "black", linetype = 2) +
+    geom_point(data = G, aes(phi, sigma, size = weight), colour = "#1b7837", alpha = 0.8) +
+    scale_size_area(max_size = 7, guide = "none") +
+    labs(title = sprintf("%d × %d = %d points", input$K, input$K, input$K^2))
+})
+
+output$curve9 <- renderPlot({
+  g <- g9(); i <- i9()
+  mix <- function(g) sapply(rr, function(x) sum(g$G$weight * dlnorm(x, g$M[i, ], g$S[i, ])))
+  cur <- rbind(data.frame(rr = rr, dens = mix(g),     what = "now"),
+               data.frame(rr = rr, dens = mix(full9), what = "full"))
+  ggplot(cur, aes(rr, dens)) +
+    geom_vline(xintercept = 1, linetype = 2) +
+    geom_line(data = subset(cur, what == "full"), colour = "grey40", linetype = 2, linewidth = 1) +
+    geom_line(data = subset(cur, what == "now"), colour = "darkgreen", linewidth = 1.4) +
+    labs(title = "Final curve (green) vs full answer (dashed)",
+         x = paste("Relative risk,", tc(d$county[i])), y = NULL) +
+    theme_classic(base_size = 13)
+})
+
+output$table9 <- renderTable({
+  i <- i9()
+  out <- rbind(g9()$sum[i, ], full9$sum[i, ])
+  data.frame(` ` = c(sprintf("%d × %d points", input$K, input$K), "Full answer"),
+             `best guess` = out$best, low = out$low, high = out$high,
+             spread = out$spread, `P(RR > 1)` = out$p, check.names = FALSE)
+}, digits = 3)
+
+classes9 <- reactive(if (input$map9 == "p") exc_class else risk_class)
+
+output$maps9 <- renderPlot({
+  what <- input$map9
+  fill <- if (what == "p") scale_fill_manual(values = exc_cols, drop = FALSE, name = NULL)
+          else risk_fill
+  map_panels(list(g9()$sum[[what]], full9$sum[[what]]),
+             c(sprintf("With %d × %d points", input$K, input$K), "Full answer"),
+             i9(), classes = classes9(), fill = fill) +
+    theme(legend.position = "bottom")
+})
+
+output$changed9 <- renderText({
+  cl <- classes9()
+  n_diff <- sum(cl(g9()$sum[[input$map9]]) != cl(full9$sum[[input$map9]]))
+  paste0(n_diff, " of 67 counties have a different colour than in the full answer.")
+})
+
+output$err9 <- renderPlot({
+  ggplot(err9, aes(K, error)) +
+    geom_hline(yintercept = 1, linetype = 2, colour = "grey50") +
+    geom_line(colour = "#1b7837") +
+    geom_point(colour = "#1b7837", size = 2.5) +
+    geom_point(data = subset(err9, K == input$K), size = 5, colour = "#1b7837") +
+    scale_x_continuous(breaks = err_K) +
+    labs(title = "Widest error in the spread, over all 67 counties (dashed: 1%)",
+         x = "Values per knob, K", y = "Error (%)") +
+    theme_classic(base_size = 12)
+})
+```
+
+```{r err-text, include = FALSE}
+e  <- function(K) round(err9$error[err9$K == K], 1)
+k1 <- err9$K[err9$error < 1][1]
+low2 <- sum(risk_class(get_K(2)$sum$low) != risk_class(full9$sum$low))   # wrong colours, K = 2
+```
+
+<div class="step">
+**What you should see when you press ▶ Play.**
+
+1. **$K$ = 2 to 4** (4 to 16 points): the green curve is too narrow. The
+   widest error in the spread is `r e(2)`% with $K$ = 2 and `r e(4)`% with
+   $K$ = 4.
+2. **$K$ = `r k1`** (`r k1^2` points): the error falls below 1%. The green
+   curve sits on the dashed one.
+3. **$K$ = 25 or 35** (625 or 1,225 points): nothing changes any more. Each
+   step only costs time.
+4. On the maps, choose **Low end (2.5%)**: with $K$ = 2, `r low2` counties have
+   the wrong colour. The best-guess and $P(\text{RR} > 1)$ maps change much
+   less. What a small $K$ gets wrong is mostly **how sure** we are: the ends of
+   the intervals.
+
+**Look at the grid.** Many points sit where the hill is white: they get almost
+no weight. The hill is narrow in $\sigma$ but wide in $\phi$, so equally spaced
+points waste effort. INLA is smarter: it puts its points where the hill is.
+
+**Conclusion of Step 9.** With two knobs, about `r k1` values per knob,
+`r k1^2` points in total, give the full answer here. More points change
+nothing.
+</div>
+
+## Step 10. The same in R-INLA
+
+INLA does Steps 7 to 9 for us, with a smarter grid: it finds the top of the
+hill first, then places its points along the hill's own directions. One option
+controls how many points it uses:
+
+```{r inla, eval = FALSE}
+inla(O ~ 1 + f(id, model = "bym2", graph = g),
+     family = "poisson", E = E, data = dat,
+     control.inla = list(int.strategy = "eb"))              # only the top, like EBest
+
+control.inla = list(int.strategy = "grid", dz = 0.75)       # a grid (the default here)
+control.inla = list(int.strategy = "grid", dz = 0.25)       # a finer grid, more points
+```
+
+## Summary in six sentences
+
+1. A model has settings nobody knows: $k$ for borrowing from the state;
+   $\sigma$ and $\phi$ for BYM2.
+2. Each value of the knobs gives every county a different curve.
+3. The data say how plausible each value of the knobs is: a hill.
+4. INLA tries several values, weights them by the hill, and averages the
+   curves.
+5. With too few values we look too sure: intervals too narrow.
+6. Here about 10 values for one knob, and about `r k1` per knob for two, are
+   enough; more values change nothing.
